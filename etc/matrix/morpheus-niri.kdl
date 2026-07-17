@@ -1,0 +1,52 @@
+// Morpheus-Sitzung: ein Installations-Stick bootet direkt in den
+// Installer — kein Login, keine Shell, nur Morpheus.
+//
+// BEWUSST keine background_color: niris Standardgrau ist dasselbe
+// Grau wie in der Greeter-Sitzung — Stick und Login sprechen so
+// exakt dieselbe Farbe.
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+cursor {
+    xcursor-theme "WhiteSur-cursors"
+    xcursor-size 24
+}
+
+environment {
+    XCURSOR_THEME "WhiteSur-cursors"
+    XCURSOR_SIZE "24"
+}
+
+// Bildschirmtastatur: die Konto-Eingabe funktioniert auch ohne
+// physische Tastatur (Touch-Geräte).
+spawn-at-startup "/usr/bin/matrix-tastatur"
+
+// Startet Morpheus; endet er (Neustart-Knopf, Schließen oder Absturz),
+// endet die Sitzung sauber — greetd startet sie frisch (Stick-Kiosk).
+spawn-at-startup "sh" "-c" "PATH=/usr/local/bin:/usr/bin:$PATH matrix-morpheus; niri msg action quit --skip-confirmation"
+
+// Morpheus schwebt in Fenstergröße mittig auf dem Grau — NICHT Vollbild.
+window-rule {
+    match app-id="^matrix-morpheus$"
+    open-floating true
+}
+
+prefer-no-csd
+
+input {
+    keyboard {
+        xkb {
+            layout "ch"
+        }
+    }
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+binds {
+    Mod+Shift+E { quit; }
+}

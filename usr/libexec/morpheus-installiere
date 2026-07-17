@@ -7,6 +7,10 @@ LOG=/tmp/morpheus-install.log
 say() { echo "$*" | tee -a "$LOG"; }
 
 DEV="${1:-}"
+# --medium: der Stick wird zum bootenden Installations-Medium
+# (Marker statt Konto — Morpheus startet dort direkt).
+MEDIUM=0
+[ "${2:-}" = "--medium" ] && MEDIUM=1
 # 1) Strenge Form: /dev/ + nur Buchstaben/Ziffern (keine Partition, kein Pfad-Trick)
 if ! [[ "$DEV" =~ ^/dev/[a-z0-9]+$ ]]; then
     say "Ungültiges Ziel: $DEV"; exit 1
@@ -39,6 +43,29 @@ say "bootc install erfolgreich."
 # ---- Morpheus (R74): das erste Konto — den Standard-Installers Kern-Aufgabe --------------
 # /tmp/morpheus-konto: 3 Zeilen (Rechnername, Benutzername, sha512crypt-Hash),
 # geschrieben von der App. Streng validieren, im Deployment anlegen, löschen.
+if [ "$MEDIUM" = "1" ]; then
+    MNT=$(mktemp -d)
+    PART=$(lsblk -nrbo NAME,SIZE "$DEV" | tail -n +2 | sort -k2 -n | tail -1 | cut -d' ' -f1)
+    if [ -n "$PART" ] && mount "/dev/$PART" "$MNT" 2>>"$LOG"; then
+        STATE=$(ls -d "$MNT"/ostree/deploy/*/ 2>/dev/null | head -1)
+        DEPLOY=$(ls -d "$STATE"deploy/*.0 2>/dev/null | head -1)
+        if [ -n "$DEPLOY" ]; then
+            mkdir -p "$DEPLOY/etc/matrix"
+            : > "$DEPLOY/etc/matrix/morpheus-medium"
+            echo "morpheus" > "$DEPLOY/etc/hostname"
+            say "Installations-Medium markiert — der Stick bootet direkt in Morpheus."
+        else
+            say "Deployment nicht gefunden — Medium-Marker übersprungen."
+        fi
+        umount "$MNT" 2>/dev/null || true
+    else
+        say "Wurzel-Partition nicht einhängbar — Medium-Marker übersprungen."
+    fi
+    rmdir "$MNT" 2>/dev/null || true
+    rm -f /tmp/morpheus-konto
+    exit 0
+fi
+
 KONTO=/tmp/morpheus-konto
 if [ -f "$KONTO" ]; then
     RECHNER=$(sed -n 1p "$KONTO")

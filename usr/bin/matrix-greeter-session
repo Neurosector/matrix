@@ -2,6 +2,13 @@
 # Matrix Greeter unter greetd — mit Sicherheitsnetz:
 # Fallback auf den dms-greeter NUR bei echtem Crash (kurze Laufzeit
 # OHNE Erfolgs-Marker) — ein schneller Recovery-Klick ist ein Erfolg.
+# Morpheus-Medium: dieser Datenträger IST der Installations-Stick —
+# statt Login startet direkt der Installer (auf niris Standardgrau,
+# demselben Grau wie diese Greeter-Sitzung).
+if [ -e /etc/matrix/morpheus-medium ]; then
+    exec niri -c /etc/matrix/morpheus-niri.kdl
+fi
+
 mkdir -p "$HOME/.local/state/DankMaterialShell"
 for f in dms-colors.json session.json; do
     for q in "$HOME/$f" "/var/cache/dms-greeter/$f"; do

@@ -158,6 +158,14 @@ fn disks_lesen() -> Vec<Disk> {
 
 // ------------------------------------------------------------------- App
 
+/// Was Morpheus erschafft: eine Installation auf diesem Gerät — oder
+/// einen Stick, der bootet und Morpheus selbst startet (R76).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Modus {
+    Geraet,
+    Medium,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Schritt {
     Willkommen,
@@ -205,6 +213,7 @@ impl Konto {
 struct App {
     rahmen: mkw::Rahmen,
     schritt: Schritt,
+    modus: Modus,
     disks: Vec<Disk>,
     wahl: Option<usize>,
     konto: Konto,
@@ -219,6 +228,8 @@ enum Msg {
     Tick,
     Taste(mkw::Taste),
     NeuLesen,
+    ModusWeiter(Modus),
+    Schliessen,
     DiskWahl(usize),
     Weiter,
     Zurueck,
@@ -241,6 +252,7 @@ impl App {
         let app = Self {
             rahmen: mkw::Rahmen::neu(APP_ID, &[]),
             schritt: start,
+            modus: Modus::Geraet,
             disks: disks_lesen(),
             wahl: None,
             konto: Konto {
@@ -270,8 +282,10 @@ impl App {
                     self.log = std::fs::read_to_string(LOG).unwrap_or_default();
                     if std::path::Path::new(FERTIG).exists() {
                         self.schritt = Schritt::Fertig;
+                        mk::feedback::erfolg();
                     } else if std::path::Path::new(FEHLER).exists() {
                         self.schritt = Schritt::Fehler;
+                        mk::feedback::fehler();
                     }
                 }
             }
@@ -279,6 +293,14 @@ impl App {
                 if self.rahmen.taste(t) {
                     return Task::none();
                 }
+            }
+            Msg::ModusWeiter(m) => {
+                self.modus = m;
+                self.disks = disks_lesen();
+                self.schritt = Schritt::Ziel;
+            }
+            Msg::Schliessen => {
+                std::process::exit(0);
             }
             Msg::NeuLesen => {
                 self.disks = disks_lesen();
@@ -297,7 +319,14 @@ impl App {
                         self.disks = disks_lesen();
                         Schritt::Ziel
                     }
-                    Schritt::Ziel if self.ziel().is_some() => Schritt::Konto,
+                    Schritt::Ziel if self.ziel().is_some() => {
+                        if self.modus == Modus::Medium {
+                            self.tipp.clear();
+                            Schritt::Bestaetigen
+                        } else {
+                            Schritt::Konto
+                        }
+                    }
                     Schritt::Konto if self.konto.ok() => {
                         self.tipp.clear();
                         Schritt::Bestaetigen
@@ -309,6 +338,7 @@ impl App {
                 self.schritt = match self.schritt {
                     Schritt::Ziel => Schritt::Willkommen,
                     Schritt::Konto => Schritt::Ziel,
+                    Schritt::Bestaetigen if self.modus == Modus::Medium => Schritt::Ziel,
                     Schritt::Bestaetigen => Schritt::Konto,
                     s => s,
                 };
@@ -325,9 +355,10 @@ impl App {
                         let dev = d.dev.clone();
                         let demo = self.demo;
                         let konto = self.konto.clone();
+                        let medium = self.modus == Modus::Medium;
                         self.log.clear();
                         self.schritt = Schritt::Laeuft;
-                        std::thread::spawn(move || installieren(&dev, demo, &konto));
+                        std::thread::spawn(move || installieren(&dev, demo, &konto, medium));
                     }
                 }
             }
@@ -372,15 +403,19 @@ impl App {
     /// Primary-Kapsel — die stille Weganzeige der Leitbild-Assistenten.
     fn schritt_punkte(&self) -> Element<'_, Msg> {
         let p = self.rahmen.palette;
+        let medium = self.modus == Modus::Medium;
+        let gesamt = if medium { 4 } else { 5 };
         let aktiv = match self.schritt {
             Schritt::Willkommen => 0usize,
             Schritt::Ziel => 1,
             Schritt::Konto => 2,
-            Schritt::Bestaetigen => 3,
-            Schritt::Laeuft | Schritt::Fertig | Schritt::Fehler => 4,
+            Schritt::Bestaetigen => {
+                if medium { 2 } else { 3 }
+            }
+            Schritt::Laeuft | Schritt::Fertig | Schritt::Fehler => gesamt - 1,
         };
         let mut punkte = row![].spacing(mk::spacing::XS).align_y(Alignment::Center);
-        for i in 0..5 {
+        for i in 0..gesamt {
             let (b, farbe) = if i == aktiv {
                 (18.0, p.primary)
             } else {
@@ -507,33 +542,103 @@ impl App {
     fn inhalt(&self) -> Element<'_, Msg> {
         let p = self.rahmen.palette;
         match self.schritt {
-            Schritt::Willkommen => column![
-                Space::new().height(Length::Fill),
-                self.kopf(
-                    mkw::symbol::ROCKET_LAUNCH,
-                    "Morpheus",
-                    "Der Matrix-Installer — bringt Matrix auf einen Datenträger.",
-                ),
-                Space::new().height(mk::spacing::L),
-                container(mkw::txt(
-                    if self.demo {
-                        "Vorführmodus — es wird keine Platte berührt."
-                    } else {
-                        "Wähle im nächsten Schritt das Ziel. Das Boot-Medium, von dem du gerade läufst, bleibt gesperrt."
-                    },
-                    mk::typo::KLEIN,
-                    p.on_surface_variant,
-                ))
-                .max_width(440),
-                Space::new().height(Length::Fill),
-            ]
-            .align_x(Alignment::Center)
-            .width(Length::Fill)
-            .into(),
+            Schritt::Willkommen => {
+                // Zwei Wege (R76): dieses Gerät — oder ein Stick, der
+                // bootet und selbst in Morpheus startet.
+                let weg = |zeichen: char, titel: &'static str, unter: &'static str, m: Modus| {
+                    button(
+                        container(
+                            row![
+                                mkw::symbol::<Msg>(zeichen, mk::icon_size::LARGE, p.primary),
+                                column![
+                                    mkw::txt(titel, mk::typo::KOPF, p.on_surface),
+                                    mkw::txt(unter, mk::typo::KLEIN, p.on_surface_variant),
+                                ]
+                                .spacing(1),
+                            ]
+                            .spacing(mk::spacing::M)
+                            .align_y(Alignment::Center),
+                        )
+                        .width(Length::Fill)
+                        .padding(mk::spacing::M),
+                    )
+                    .padding(0)
+                    .width(Length::Fixed(440.0))
+                    .style(move |_, status| {
+                        let base = p.surface_container.over(p.surface, 0.5);
+                        let bg = match status {
+                            iced::widget::button::Status::Hovered => {
+                                p.on_surface.over(base, mk::state_layer::HOVER)
+                            }
+                            iced::widget::button::Status::Pressed => {
+                                p.on_surface.over(base, mk::state_layer::PRESSED)
+                            }
+                            _ => base,
+                        };
+                        // familien-ausnahme: Weg-Karte des Installers — Karte + Hover-Ton in EINEM Knopf-Stil (wie die Datenträger-Karte)
+                        iced::widget::button::Style {
+                            background: Some(color(bg).into()),
+                            text_color: color(p.on_surface),
+                            border: iced::Border {
+                                radius: mk::radius::NORMAL.into(),
+                                width: 1.0,
+                                color: color(p.outline.over(p.surface_container_high, 0.4)),
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .on_press(Msg::ModusWeiter(m))
+                };
+                column![
+                    Space::new().height(Length::Fill),
+                    self.kopf(
+                        mkw::symbol::ROCKET_LAUNCH,
+                        "Morpheus",
+                        "Der Matrix-Installer — bringt Matrix auf einen Datenträger.",
+                    ),
+                    Space::new().height(mk::spacing::L),
+                    weg(
+                        mkw::symbol::STORAGE,
+                        "Matrix auf diesem Gerät installieren",
+                        "Geführte Installation mit Konto-Anlage auf eine Platte",
+                        Modus::Geraet,
+                    ),
+                    Space::new().height(mk::spacing::S),
+                    weg(
+                        mkw::symbol::USB,
+                        "Installations-Stick erstellen",
+                        "Ein USB-Stick, der bootet und direkt Morpheus startet",
+                        Modus::Medium,
+                    ),
+                    Space::new().height(mk::spacing::M),
+                    container(mkw::txt(
+                        if self.demo {
+                            "Vorführmodus — es wird keine Platte berührt."
+                        } else {
+                            "Das Boot-Medium, von dem du gerade läufst, bleibt gesperrt."
+                        },
+                        mk::typo::KLEIN,
+                        p.on_surface_variant,
+                    ))
+                    .max_width(440),
+                    Space::new().height(Length::Fill),
+                ]
+                .align_x(Alignment::Center)
+                .width(Length::Fill)
+                .into()
+            }
 
             Schritt::Ziel => {
                 let mut liste = column![
-                    mkw::txt("Ziel-Datenträger wählen", mk::typo::UNTERTITEL, p.on_surface),
+                    mkw::txt(
+                        if self.modus == Modus::Medium {
+                            "USB-Stick für das Installations-Medium wählen"
+                        } else {
+                            "Ziel-Datenträger wählen"
+                        },
+                        mk::typo::UNTERTITEL,
+                        p.on_surface,
+                    ),
                     mkw::txt(
                         "Alle Daten auf dem gewählten Datenträger werden gelöscht.",
                         mk::typo::KLEIN,
@@ -625,11 +730,15 @@ impl App {
                                 p.on_surface,
                             ),
                             mkw::txt(
-                                format!(
-                                    "Konto: {} auf \u{201e}{}\u{201c}",
-                                    self.konto.nutzer.trim(),
-                                    self.konto.rechner.trim()
-                                ),
+                                if self.modus == Modus::Medium {
+                                    String::from("Der Stick bootet danach direkt in Morpheus.")
+                                } else {
+                                    format!(
+                                        "Konto: {} auf \u{201e}{}\u{201c}",
+                                        self.konto.nutzer.trim(),
+                                        self.konto.rechner.trim()
+                                    )
+                                },
                                 mk::typo::KLEIN,
                                 p.on_surface_variant,
                             ),
@@ -683,11 +792,19 @@ impl App {
 
             Schritt::Fertig => column![
                 Space::new().height(Length::Fill),
-                self.kopf(
-                    mkw::symbol::CHECK,
-                    "Willkommen in der Matrix",
-                    "Entferne das Boot-Medium und starte neu — dein Konto wartet am Login.",
-                ),
+                if self.modus == Modus::Medium {
+                    self.kopf(
+                        mkw::symbol::CHECK,
+                        "Der Stick ist bereit",
+                        "Boote einen Rechner davon — Morpheus startet automatisch.",
+                    )
+                } else {
+                    self.kopf(
+                        mkw::symbol::CHECK,
+                        "Willkommen in der Matrix",
+                        "Entferne das Boot-Medium und starte neu — dein Konto wartet am Login.",
+                    )
+                },
                 Space::new().height(Length::Fill),
             ]
             .align_x(Alignment::Center)
@@ -718,10 +835,7 @@ impl App {
         };
         use mkw::knopfart::{Rolle, Stil};
         let reihe = match self.schritt {
-            Schritt::Willkommen => row![
-                Space::new().width(Length::Fill),
-                knopf("Fortfahren", Stil::Prominent, Rolle::Normal, Some(Msg::Weiter)),
-            ],
+            Schritt::Willkommen => row![Space::new().width(Length::Fill)],
             Schritt::Ziel => row![
                 knopf("Zurück", Stil::Randlos, Rolle::Normal, Some(Msg::Zurueck)),
                 mkw::ui::werkzeug_knopf(mkw::symbol::RESTART, Some(Msg::NeuLesen), p),
@@ -749,7 +863,11 @@ impl App {
                     knopf("Zurück", Stil::Randlos, Rolle::Normal, Some(Msg::Zurueck)),
                     Space::new().width(Length::Fill),
                     knopf(
-                        "Löschen und installieren",
+                        if self.modus == Modus::Medium {
+                            "Löschen und Stick erstellen"
+                        } else {
+                            "Löschen und installieren"
+                        },
                         Stil::Prominent,
                         Rolle::Destruktiv,
                         bereit.then_some(Msg::Installieren),
@@ -757,6 +875,10 @@ impl App {
                 ]
             }
             Schritt::Laeuft => row![Space::new().width(Length::Fill)],
+            Schritt::Fertig if self.modus == Modus::Medium => row![
+                Space::new().width(Length::Fill),
+                knopf("Schließen", Stil::Prominent, Rolle::Normal, Some(Msg::Schliessen)),
+            ],
             Schritt::Fertig => row![
                 Space::new().width(Length::Fill),
                 knopf("Jetzt neu starten", Stil::Prominent, Rolle::Normal, Some(Msg::Neustarten)),
@@ -792,7 +914,7 @@ impl App {
 
 /// Startet den Root-Helfer (echt) bzw. spielt den Ablauf vor (Demo).
 /// Schreibt LOG laufend und berührt am Ende FERTIG oder FEHLER.
-fn installieren(dev: &str, demo: bool, konto: &Konto) {
+fn installieren(dev: &str, demo: bool, konto: &Konto, medium: bool) {
     let _ = std::fs::remove_file(FERTIG);
     let _ = std::fs::remove_file(FEHLER);
 
@@ -804,7 +926,11 @@ fn installieren(dev: &str, demo: bool, konto: &Konto) {
             "Dateisystem schreiben …",
             "Abbild entpacken …",
             "Bootloader einrichten …",
-            &format!("Konto {} auf \u{201e}{}\u{201c} anlegen …", konto.nutzer, konto.rechner),
+            &(if medium {
+                String::from("Installations-Medium markieren …")
+            } else {
+                format!("Konto {} auf \u{201e}{}\u{201c} anlegen …", konto.nutzer, konto.rechner)
+            }),
             "Fertig.",
         ] {
             let vorher = std::fs::read_to_string(LOG).unwrap_or_default();
@@ -818,6 +944,25 @@ fn installieren(dev: &str, demo: bool, konto: &Konto) {
     // Konto-Übergabe: Hash statt Klartext (sha512crypt via openssl,
     // Passwort über stdin — nie in einer Prozessliste), Datei nur für
     // Besitzer lesbar; der Helfer löscht sie nach Gebrauch.
+    if medium {
+        // Medium: kein Konto — der Helfer markiert den Stick als
+        // Installations-Medium (bootet direkt in Morpheus).
+        let status = std::process::Command::new("pkexec")
+            .args([HELFER, dev, "--medium"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                let _ = std::fs::write(FERTIG, "1");
+            }
+            _ => {
+                let vorher = std::fs::read_to_string(LOG).unwrap_or_default();
+                let _ = std::fs::write(LOG, format!("{vorher}\nErstellung abgebrochen.\n"));
+                let _ = std::fs::write(FEHLER, "1");
+            }
+        }
+        return;
+    }
+
     let hash = (|| -> Option<String> {
         use std::io::Write;
         let mut kind = std::process::Command::new("openssl")
