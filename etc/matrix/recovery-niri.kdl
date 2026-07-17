@@ -1,0 +1,32 @@
+// Minimale niri-Sitzung für die Wiederherstellung des Wächters.
+// Startet ausschließlich die geführte Recovery-App (maximiert, ohne
+// Leiste/Shell). Läuft als Benutzer `wache` — siehe Containerfile.
+
+// Startet die Recovery-App; endet sie (Zurück zum Login, Fertig oder
+// Absturz), wird die niri-Sitzung sauber beendet → zurück zum Login-Screen.
+// Ohne diesen Wrapper bliebe nach App-Ende ein leerer grauer Bildschirm.
+spawn-at-startup "sh" "-c" "matrix-wiederherstellung; niri msg action quit --skip-confirmation"
+
+// Recovery-App immer maximiert öffnen, keine Fensterdekoration nötig.
+window-rule {
+    open-maximized true
+}
+
+prefer-no-csd
+
+input {
+    keyboard {
+        xkb {
+            layout "ch"
+        }
+    }
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+// Beendet die Sitzung sauber, falls jemand doch eine Tastenkombi sucht.
+binds {
+    Mod+Shift+E { quit; }
+}

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Öffnet das Werkbank-Status-Fenster automatisch bei jedem aktiven Bau.
+STDIR="$HOME/.local/state/matrix"; mkdir -p "$STDIR"
+aktiv() {
+  for L in "$STDIR/bau.log" ~/laptop-image.log ~/matrixdev-setup.log ~/niri-bau.log /tmp/matrix-image*.log; do
+    [ -f "$L" ] || continue
+    [ $(( $(date +%s) - $(stat -c %Y "$L") )) -lt 25 ] && return 0
+  done
+  return 1
+}
+while true; do
+  if aktiv && ! pgrep -f "[m]atrix-bau-status" >/dev/null; then
+    foot --title "Matrix Werkbank" -e bash -lc "exec $HOME/.local/bin/matrix-bau-status" >/dev/null 2>&1 &
+  fi
+  sleep 5
+done

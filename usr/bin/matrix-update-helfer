@@ -1,0 +1,12 @@
+#!/bin/sh
+# Matrix-Update-Helfer — das EINZIGE, was der Updater als root darf.
+# Kein Argument wird durchgereicht; die Quelle ist fest verdrahtet.
+# Haengt der Origin noch am Installations-Stick (oci-archive), stellt
+# das erste Update auf die Matrix-Quelle um — danach ist es immer upgrade.
+set -eu
+BILD="ghcr.io/neurosector/matrix:latest"
+if bootc status 2>/dev/null | grep -q "registry"; then
+    exec bootc upgrade
+else
+    exec bootc switch "$BILD"
+fi

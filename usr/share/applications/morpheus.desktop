@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Morpheus
+Comment=Der Matrix-Installer — bringt Matrix auf einen Datenträger
+Exec=matrix-morpheus
+Icon=matrix-morpheus
+Terminal=false
+Categories=System;
+StartupWMClass=matrix-morpheus

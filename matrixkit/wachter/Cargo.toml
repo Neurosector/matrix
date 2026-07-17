@@ -1,0 +1,10 @@
+[package]
+name = "matrix-wachter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix-Wächter — verhindert, dass Updates das System zurücksetzen"
+
+[dependencies]
+matrixkit-theme = { path = "../matrixkit-theme" }
+serde_json = "1"

@@ -1,0 +1,18 @@
+{
+  "pinnedApps": [
+    "matrix-einstellungen",
+    "matrix-sysmon",
+    "matrix-farben",
+    "matrix-klaenge",
+    "matrix-codes",
+    "matrix-schluessel-app",
+    "matrix-hilfe",
+    "org.mozilla.firefox",
+    "org.gnome.Nautilus"
+  ],
+  "barPinnedApps": [],
+  "configVersion": 3,
+  "wallpaperPath": "/usr/share/backgrounds/matrix/matrix-standard.jpg",
+  "wallpaperPathLight": "/usr/share/backgrounds/matrix/matrix-standard.jpg",
+  "wallpaperPathDark": "/usr/share/backgrounds/matrix/matrix-standard.jpg"
+}

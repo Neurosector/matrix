@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Matrix Leinwand
+Comment=Der unendliche 2D-Desktop — Fenster frei, per Leerraum-Drag verschieben
+Exec=niri-leinwand-session
+Type=Application
+DesktopNames=niri

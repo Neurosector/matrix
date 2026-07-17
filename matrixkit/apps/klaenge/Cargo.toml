@@ -1,0 +1,9 @@
+[package]
+name = "matrix-klaenge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Klänge — Klang-Daemon (--hooks) und WAV-Renderer (--generieren); die Oberfläche wohnt in Matrix Einstellungen"
+
+[dependencies]
+matrixkit-theme = { path = "../../matrixkit-theme" }

@@ -1,0 +1,21 @@
+#!/bin/bash
+# Live-Status des aktuellen Matrix-Baus — Stufe, Laufzeit, letzte Zeilen.
+STDIR="$HOME/.local/state/matrix"; mkdir -p "$STDIR"
+log() { ls -t "$STDIR/bau.log" ~/laptop-image.log ~/matrixdev-setup.log ~/niri-bau.log /tmp/matrix-image*.log 2>/dev/null | head -1; }
+while true; do
+  L=$(log); clear
+  printf '\e[1;38;5;39m  ▐ MATRIX WERKBANK ▌\e[0m   %s\n' "$(date +%H:%M:%S)"
+  printf '  \e[2m%s\e[0m\n\n' "${L:-kein Bau-Log gefunden}"
+  if [ -n "$L" ] && [ -f "$L" ]; then
+    STAGE=$(grep -E '^===|STEP [0-9]+/|Compiling |Finished ' "$L" 2>/dev/null | tail -1)
+    AGE=$(( $(date +%s) - $(stat -c %Y "$L") ))
+    if [ "$AGE" -lt 30 ]; then STATE="\e[1;32m● LÄUFT\e[0m"; else STATE="\e[1;33m● ruht (${AGE}s)\e[0m"; fi
+    grep -q 'FERTIG\|Successfully tagged' "$L" 2>/dev/null && STATE="\e[1;36m✔ FERTIG\e[0m"
+    grep -qiE 'error\[|error:|FEHLGESCHLAGEN|BAU-EXIT=[1-9]' "$L" 2>/dev/null && STATE="\e[1;31m✖ FEHLER\e[0m"
+    printf '  Status: %b\n' "$STATE"
+    printf '  Stufe:  \e[1m%s\e[0m\n\n' "${STAGE:0:70}"
+    printf '  \e[2m── letzte Zeilen ──────────────────────────\e[0m\n'
+    tail -14 "$L" 2>/dev/null | sed 's/^/  /' | cut -c1-78
+  fi
+  sleep 2
+done

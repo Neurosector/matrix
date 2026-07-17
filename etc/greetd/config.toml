@@ -1,0 +1,8 @@
+[terminal]
+vt = 1
+
+[default_session]
+# Der Matrix Greeter (App #16) — mit eingebautem Fallback auf den
+# dms-greeter, falls die Kiosk-Session binnen 8 s stirbt.
+command = "/usr/bin/matrix-greeter-session"
+user = "greeter"

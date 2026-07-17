@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Dateien
+Comment=Der Dateimanager — Seitenleiste, Liste, Pfadleiste, Papierkorb
+Exec=matrix-dateien
+Icon=matrix-dateien
+Terminal=false
+Categories=System;FileManager;
+StartupWMClass=matrix-dateien

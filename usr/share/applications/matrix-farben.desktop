@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Farben
+GenericName=Palette
+Comment=Die lebende System-Palette zum Anfassen — Klick kopiert den Hex-Wert
+Exec=/usr/bin/matrix-farben
+Icon=matrix-farben
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=farben;palette;theme;matugen;matrix;

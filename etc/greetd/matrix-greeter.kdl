@@ -1,0 +1,18 @@
+// Kiosk-Config für den Matrix Greeter: nichts als der Login.
+// Endet matrix-greeter (Erfolg ODER Absturz), endet auch niri —
+// greetd wechselt dann zur Nutzer-Session bzw. der Wrapper fällt zurück.
+hotkey-overlay {
+    skip-at-startup
+}
+cursor {
+    xcursor-theme "WhiteSur-cursors"
+    xcursor-size 24
+}
+environment {
+    XCURSOR_THEME "WhiteSur-cursors"
+    XCURSOR_SIZE "24"
+}
+// R58: die Bildschirmtastatur wacht auch am Login — ohne Type Cover
+// tippt man das Passwort auf dem Schirm (Fokus-Funk + Virtual Keyboard).
+spawn-at-startup "/usr/bin/matrix-tastatur"
+spawn-at-startup "sh" "-c" "PATH=/usr/local/bin:/usr/bin:$PATH matrix-greeter; niri msg action quit --skip-confirmation"

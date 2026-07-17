@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Icons
+Name[de]=Matrix Icons
+Comment=Der Icon Composer — lebende Icons aus Ebenen
+Exec=matrix-icons
+Icon=matrix-icons
+Terminal=false
+Categories=Graphics;Development;

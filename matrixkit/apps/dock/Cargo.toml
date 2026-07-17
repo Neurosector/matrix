@@ -1,0 +1,14 @@
+[package]
+name = "matrix-dock"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Dock — laufende Apps im Blick, ein Klick holt sie"
+
+[dependencies]
+matrixkit-theme = { path = "../../matrixkit-theme" }
+matrixkit-widgets = { path = "../../matrixkit-widgets" }
+matrixkit-icons = { path = "../../matrixkit-icons" }
+iced = { version = "0.14", features = ["thread-pool", "image"] }
+iced_layershell = "0.18"
+serde_json = "1"

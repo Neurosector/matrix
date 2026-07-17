@@ -1,0 +1,6 @@
+[Unit]
+Description=Matrix-Wächter — Update-Resets erkennen und selbstheilen
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/matrix-wachter

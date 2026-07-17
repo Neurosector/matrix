@@ -1,0 +1,61 @@
+[Plymouth Theme]
+Name=Matrix
+Description=Der ruhige Matrix-Auftritt: Punktraster-Zeichen auf dunkler Fläche, pulsierende Punkte.
+ModuleName=two-step
+
+[two-step]
+Font=Cantarell 12
+TitleFont=Cantarell Light 30
+ImageDir=/usr/share/plymouth/themes/matrix
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.382
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.58
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.40
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x111318
+BackgroundEndColor=0x0e1014
+ProgressBarBackgroundColor=0x2a2d33
+ProgressBarForegroundColor=0xe6e3d9
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Updates werden installiert …
+SubTitle=Schalte den Computer nicht aus
+
+[system-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=System wird aktualisiert …
+SubTitle=Schalte den Computer nicht aus
+
+[firmware-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Firmware wird aktualisiert …
+SubTitle=Schalte den Computer nicht aus
+
+[system-reset]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=System wird zurückgesetzt …
+SubTitle=Schalte den Computer nicht aus

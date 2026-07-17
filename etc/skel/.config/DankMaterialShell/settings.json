@@ -1,0 +1,9 @@
+{
+  "osdVolumeEnabled": false,
+  "osdMediaVolumeEnabled": false,
+  "osdBrightnessEnabled": false,
+  "osdIdleInhibitorEnabled": false,
+  "osdMicMuteEnabled": false,
+  "osdCapsLockEnabled": false,
+  "osdAudioOutputEnabled": false
+}

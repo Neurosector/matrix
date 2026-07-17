@@ -1,0 +1,20 @@
+// ! Auto-generiert von der Matrix-Farbkette (matugen) — nicht editieren.
+layout {
+    background-color "transparent"
+
+    focus-ring {
+        active-color   "{{colors.primary.default.hex}}"
+        inactive-color "{{colors.outline.default.hex}}"
+        urgent-color   "{{colors.error.default.hex}}"
+    }
+
+    border {
+        active-color   "{{colors.primary.default.hex}}"
+        inactive-color "{{colors.outline.default.hex}}"
+        urgent-color   "{{colors.error.default.hex}}"
+    }
+
+    shadow {
+        color "#00000070"
+    }
+}

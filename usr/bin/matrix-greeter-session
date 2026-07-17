@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+# Matrix Greeter unter greetd — mit Sicherheitsnetz:
+# Fallback auf den dms-greeter NUR bei echtem Crash (kurze Laufzeit
+# OHNE Erfolgs-Marker) — ein schneller Recovery-Klick ist ein Erfolg.
+mkdir -p "$HOME/.local/state/DankMaterialShell"
+for f in dms-colors.json session.json; do
+    for q in "$HOME/$f" "/var/cache/dms-greeter/$f"; do
+        [ -e "$q" ] && ln -sf "$q" "$HOME/.local/state/DankMaterialShell/$f" && break
+    done
+done
+rm -f /tmp/matrix-greeter-erfolg
+START=$(date +%s)
+niri -c /etc/greetd/matrix-greeter.kdl
+DAUER=$(( $(date +%s) - START ))
+if [ "$DAUER" -lt 8 ] && [ ! -e /tmp/matrix-greeter-erfolg ]; then
+    exec /usr/bin/dms-greeter --command niri
+fi

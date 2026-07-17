@@ -1,0 +1,48 @@
+// Desktop-Modus (Scroll <-> Klassisch), geschrieben von desktop-modus
+include optional=true "desktop-mode.kdl"
+include optional=true "farben.kdl"
+
+// === UI-Feinschliff (von Claude, 2026-07-04) ===
+
+// Cursor passend zu den WhiteSur-Icons, einheitlich auch fuer XWayland-Apps
+cursor {
+    xcursor-theme "WhiteSur-cursors"
+    xcursor-size 24
+}
+
+environment {
+    XCURSOR_THEME "WhiteSur-cursors"
+    XCURSOR_SIZE "24"
+    // Steam-UI auf 4K korrekt skalieren
+    STEAM_FORCE_DESKTOPUI_SCALING "1.5"
+}
+
+// Fensterecken staerker runden (naeher an Leitbild, Default war 6)
+window-rule {
+    geometry-corner-radius 10
+    clip-to-geometry true
+}
+
+// === "Minimieren" via Ablage-Workspace (Leitbild-Gefühl) ===
+workspace "ablage"
+
+
+binds {
+    Mod+M hotkey-overlay-title="Fenster ablegen (minimieren)" { move-window-to-workspace "ablage" focus=false; }
+    Mod+Shift+M hotkey-overlay-title="Ablage anzeigen/zurück" { spawn "sh" "-c" "touch /run/user/1000/matrix-ablage-besuch; niri msg action focus-workspace ablage"; }
+    Mod+Ctrl+M hotkey-overlay-title="Fenster zurückholen" { move-window-to-workspace 1; }
+    Mod+Shift+D hotkey-overlay-title="Desktop-Modus: Scroll/Klassisch" { spawn "desktop-modus"; }
+}
+
+// MatrixKit-Desktop-Widget: startet mit der Session
+// TIMEOUT (5.7.2026): Widget pausiert — friert im niri-Spawn ein (Ticks kommen nicht an). Fenster-App unberührt.
+// spawn-at-startup "~/.local/bin/matrix-sysmon" "--widget"
+
+// === Matrix-Leisten (Ablösung der DMS-Bar/-Dock, 7.7.2026) ===
+// Eigene Bar, Dock und Zentrale-Zugang — die DMS-Leisten werden nach
+// dem Start höflich per IPC versteckt (reveal macht sie zurückholbar).
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-bar --reservieren"
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-dock --reservieren"
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-mitteilungen"
+spawn-at-startup "sh" "-c" "sleep 3; PATH=$HOME/.local/bin:$PATH exec matrix-hintergrund"
+spawn-at-startup "sh" "-c" "sleep 8; PATH=$HOME/.local/bin:$PATH exec matrix-wachdienst"

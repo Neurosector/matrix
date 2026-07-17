@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Hilfe
+GenericName=Hilfe
+Comment=Alles Wissenswerte zu MatrixKit — für Nutzer und Entwickler
+Exec=/usr/bin/matrix-hilfe
+Icon=matrix-hilfe
+Terminal=false
+Categories=Documentation;Utility;
+Keywords=hilfe;doku;matrixkit;handbuch;matrix;

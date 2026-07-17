@@ -1,0 +1,7 @@
+[Unit]
+Description=Sonnenplanung bei Anmeldung (Catch-up)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/matrix-sonne
+[Install]
+WantedBy=default.target

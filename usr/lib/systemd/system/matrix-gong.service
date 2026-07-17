@@ -1,0 +1,32 @@
+[Unit]
+Description=Matrix Gong — der Startklang, so früh wie der Kernel kann (Leitbild-Firmware-Extrakt)
+DefaultDependencies=no
+After=systemd-udev-trigger.service local-fs.target
+Wants=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+# Beweisfähig (R53c): jeder Schritt landet im Journal. Explizites
+# Gerät plughw:0,0 — als root ohne Sound-Server ist "default" ein
+# Routing-Glücksspiel. Master/Speaker/PCM entstummen (alsa-restore
+# läuft so früh noch nicht). /etc/matrix/gong-aus = still (NVRAM).
+ExecStart=/bin/sh -c '\
+  test -e /etc/matrix/gong-aus && { echo "gong-aus gesetzt"; exit 0; }; \
+  for i in $(seq 1 60); do \
+    if aplay -l 2>/dev/null | grep -qE "Karte|card"; then \
+      echo "Codec da nach $i Versuchen"; \
+      amixer -c 0 sset Master 90% unmute 2>&1 | tail -1; \
+      amixer -c 0 sset Speaker 90% unmute 2>&1 | tail -1; \
+      amixer -c 0 sset PCM 90% unmute 2>&1 | tail -1; \
+      if aplay -q -D plughw:0,0 /usr/share/matrix/klaenge/00-gong.wav; then \
+        echo "GONG GESPIELT (plughw)"; exit 0; \
+      fi; \
+      echo "plughw scheiterte, versuche default"; \
+      aplay -q /usr/share/matrix/klaenge/00-gong.wav && { echo "GONG GESPIELT (default)"; exit 0; }; \
+    fi; \
+    sleep 0.2; \
+  done; \
+  echo "GONG NICHT GESPIELT — Codec nie bereit oder aplay scheiterte"'
+
+[Install]
+WantedBy=sysinit.target

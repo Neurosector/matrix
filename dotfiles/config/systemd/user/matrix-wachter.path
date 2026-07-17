@@ -1,0 +1,9 @@
+[Unit]
+Description=Matrix-Wächter — wacht über config.kdl und DMS-Settings
+
+[Path]
+PathModified=%h/.config/niri/config.kdl
+PathModified=%h/.config/DankMaterialShell/settings.json
+
+[Install]
+WantedBy=default.target

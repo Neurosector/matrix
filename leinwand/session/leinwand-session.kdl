@@ -1,0 +1,11 @@
+// Matrix Leinwand — Sitzungs-Config: die normale Umgebung + Leinwand-Geste.
+// Nach ~/.config/niri/leinwand-session.kdl legen.
+include "config.kdl"
+
+gestures {
+    leinwand-drag
+}
+
+// Shell (DankMaterialShell) + Matrix-Dienste starten — der direkte
+// niri-Start aktiviert graphical-session.target nicht automatisch.
+spawn-at-startup "sh" "-c" "~/.config/niri/leinwand-start.sh"

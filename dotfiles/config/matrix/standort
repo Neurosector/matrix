@@ -1,0 +1,4 @@
+# Standort für den Sonnen-Rhythmus (Hell/Dunkel nach echtem Sonnenstand).
+# Eigene Koordinaten eintragen — Standard: geografische Mitte Deutschlands.
+LAT=51.0
+LON=10.0

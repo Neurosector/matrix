@@ -1,0 +1,26 @@
+#!/bin/bash
+# Matrix Desktop-Modus: scroll (Niri-Fensterreihe) <-> klassisch (frei/ueberlappend (klassisch))
+# Aufruf: desktop-modus [toggle|klassisch|scroll]   (Standard: toggle)
+set -euo pipefail
+MODE_FILE="$HOME/.config/niri/desktop-mode.kdl"
+STATE_FILE="$HOME/.config/niri/.desktop-mode"
+cur=$(cat "$STATE_FILE" 2>/dev/null || echo scroll)
+case "${1:-toggle}" in
+  klassisch|floating) ziel=klassisch ;;
+  scroll|tiling)      ziel=scroll ;;
+  *) [ "$cur" = scroll ] && ziel=klassisch || ziel=scroll ;;
+esac
+if [ "$ziel" = klassisch ]; then
+  printf "// AUTO (desktop-modus) — klassischer Desktop: neue Fenster oeffnen frei\nwindow-rule {\n    open-floating true\n}\n" > "$MODE_FILE"
+  niri msg --json windows 2>/dev/null | jq -r ".[].id" | while read -r id; do
+    niri msg action move-window-to-floating --id "$id" 2>/dev/null || true
+  done
+  notify-send -a Matrix "Desktop-Modus: Klassisch" "Fenster frei und überlappend. Super+Shift+D wechselt zurück."
+else
+  printf "// AUTO (desktop-modus) — Scroll-Desktop (Niri-Standard)\n" > "$MODE_FILE"
+  niri msg --json windows 2>/dev/null | jq -r ".[].id" | while read -r id; do
+    niri msg action move-window-to-tiling --id "$id" 2>/dev/null || true
+  done
+  notify-send -a Matrix "Desktop-Modus: Scroll" "Die unendliche Fensterreihe ist zurück."
+fi
+echo "$ziel" > "$STATE_FILE"

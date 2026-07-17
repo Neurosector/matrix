@@ -1,0 +1,44 @@
+name: Matrix-Image bauen
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Woechentlich neu auf aktuellem Zirconium aufbauen (So 03:00 UTC)
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Owner kleinschreiben (Registry verlangt lowercase)
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Image bauen
+        run: sudo podman build --pull=always -t ghcr.io/${{ env.OWNER_LC }}/matrix:latest .
+
+      - name: Bei ghcr.io anmelden
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push
+        run: sudo podman push ghcr.io/${{ env.OWNER_LC }}/matrix:latest
+
+  matrixkit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Wayland-Build-Abhaengigkeiten
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev
+      - name: Feder- und Token-Tests
+        working-directory: matrixkit
+        run: cargo test --workspace
+      - name: Apps bauen
+        working-directory: matrixkit
+        run: cargo build --release -p matrix-sysmon

@@ -1,0 +1,107 @@
+// Desktop-Modus (Scroll <-> Klassisch), geschrieben von desktop-modus
+include optional=true "desktop-mode.kdl"
+include optional=true "farben.kdl"
+include optional=true "dms/colors.kdl"  // Fokus-Ring/Rahmen-Farben aus der Matrix-Farbkette (matugen)
+
+// === UI-Feinschliff (von Claude, 2026-07-04) ===
+
+// Cursor passend zu den WhiteSur-Icons, einheitlich auch fuer XWayland-Apps
+cursor {
+    xcursor-theme "WhiteSur-cursors"
+    xcursor-size 24
+}
+
+environment {
+    XCURSOR_THEME "WhiteSur-cursors"
+    XCURSOR_SIZE "24"
+    // Steam-UI auf 4K korrekt skalieren
+    STEAM_FORCE_DESKTOPUI_SCALING "1.5"
+}
+
+// Fensterecken staerker runden (naeher an Leitbild, Default war 6)
+window-rule {
+    geometry-corner-radius 10
+    clip-to-geometry true
+}
+
+// === "Minimieren" via Ablage-Workspace (Leitbild-Gefühl) ===
+workspace "ablage"
+
+
+binds {
+    // R69: Aufnahme-Grammatik (Aufnahme-Kürzel)
+    Mod+Shift+3 { spawn "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-aufnahme foto"; }
+    Mod+Shift+4 { spawn "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-aufnahme bereich"; }
+    Mod+Shift+5 { spawn "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-aufnahme panel"; }
+    Print { spawn "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-aufnahme foto"; }
+    Mod+M hotkey-overlay-title="Fenster ablegen (minimieren)" { move-window-to-workspace "ablage" focus=false; }
+    Mod+Shift+M hotkey-overlay-title="Ablage anzeigen/zurück" { spawn "sh" "-c" "touch /run/user/1000/matrix-ablage-besuch; niri msg action focus-workspace ablage"; }
+    Mod+Ctrl+M hotkey-overlay-title="Fenster zurückholen" { move-window-to-workspace 1; }
+    Mod+Shift+D hotkey-overlay-title="Desktop-Modus: Scroll/Klassisch" { spawn "desktop-modus"; }
+    // Matrix Start / Suchpalette-Palette (Apps, offene Fenster, Aktionen, Rechner)
+    Mod+Space hotkey-overlay-title="Matrix Start" { spawn "matrix-start"; }
+    // Lautstärke & Helligkeit → matrix-osd (Dynamic Dock + Leitbild-Tick), R30
+    XF86AudioRaiseVolume allow-when-locked=true { spawn "matrix-osd" "lauter"; }
+    XF86AudioLowerVolume allow-when-locked=true { spawn "matrix-osd" "leiser"; }
+    XF86AudioMute allow-when-locked=true { spawn "matrix-osd" "stumm"; }
+    XF86AudioMicMute allow-when-locked=true { spawn "matrix-osd" "mikro"; }
+    XF86MonBrightnessUp allow-when-locked=true { spawn "matrix-osd" "heller"; }
+    XF86MonBrightnessDown allow-when-locked=true { spawn "matrix-osd" "dunkler"; }
+}
+
+// MatrixKit-Desktop-Widget: startet mit der Session
+// TIMEOUT (5.7.2026): Widget pausiert — friert im niri-Spawn ein (Ticks kommen nicht an). Fenster-App unberührt.
+// spawn-at-startup "~/.local/bin/matrix-sysmon" "--widget"
+
+// === Matrix-Leisten (Ablösung der DMS-Bar/-Dock, 7.7.2026) ===
+// Eigene Bar, Dock und Zentrale-Zugang — die DMS-Leisten werden nach
+// dem Start höflich per IPC versteckt (reveal macht sie zurückholbar).
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-bar --reservieren"
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-dock --reservieren"
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-mitteilungen"
+spawn-at-startup "sh" "-c" "sleep 3; PATH=$HOME/.local/bin:$PATH exec matrix-hintergrund"
+spawn-at-startup "sh" "-c" "sleep 8; PATH=$HOME/.local/bin:$PATH exec matrix-wachdienst"
+// R58: die Bildschirmtastatur-Wache — zeigt die Tastatur, wenn ein
+// Eingabefeld fokussiert ist und keine physische Tastatur dranhängt
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:$PATH exec matrix-tastatur"
+
+// Werkbank: Bau-Status-Fenster automatisch bei jedem Bau
+spawn-at-startup "sh" "-c" "PATH=$HOME/.local/bin:/usr/local/bin:$PATH exec matrix-bau-wache"
+// Anmelde-Gruß (01) — kurz warten, bis PipeWire steht (R30)
+spawn-at-startup "sh" "-c" "sleep 2; exec matrix-osd anmeldung"
+
+// === Leitbild-Maschinenraum (Runde 32) — empirisch vom Referenzsystem abgelesen ===
+// Tippgefühl: InitialKeyRepeat 25 × 15 ms = 375 ms, KeyRepeat 6 × 15 ms ≈ 11 Hz.
+// Trackpad: Tap-to-Click an, Natural Scrolling an, Tracking 0.875/3 ≈ 0.3.
+input {
+    keyboard {
+        repeat-delay 375
+        repeat-rate 11
+    }
+    touchpad {
+        tap
+        natural-scroll
+        accel-speed 0.3
+        dwt
+    }
+}
+
+// R51: EINE Luft überall — gaps 10 gibt maximierten Fenstern seitlich,
+// zur Bar und zum Dock denselben 10-px-Abstand (wie die Leisten zur
+// Kante). Struts unnötig: volle Spalten = Arbeitsfläche minus 2*gaps.
+layout {
+    gaps 10
+}
+
+
+// R56: Matrix Web sind ZWEI Fenster (Chrome + WebKit-Traeger), die die
+// Andock-Kopplung uebereinanderlegt. Beide FLOATING oeffnen, sonst
+// rangeln sie im Kachel-Layout und move-floating-window greift nicht.
+window-rule {
+    match app-id="^matrix-web$"
+    open-floating true
+}
+window-rule {
+    match app-id="^matrix-web-inhalt$"
+    open-floating true
+}

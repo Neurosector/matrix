@@ -1,0 +1,29 @@
+// Matrix-Übersicht (R64): `fastfetch` und `matrix-uebersicht` sprechen
+// Matrix — eigenes Emblem, deutsche Schlüssel, die MatrixKit-Zeile.
+{
+    "logo": {
+        "type": "file",
+        "source": "/usr/share/matrix/fastfetch-logo.txt",
+        "color": { "1": "blue", "2": "magenta" },
+        "padding": { "top": 1, "right": 3 }
+    },
+    "display": { "separator": "   " },
+    "modules": [
+        "title",
+        "separator",
+        { "type": "os", "key": "System" },
+        { "type": "kernel", "key": "Kern" },
+        { "type": "custom", "key": "Oberfläche", "format": "Leinwand · MatrixKit" },
+        { "type": "uptime", "key": "Wach seit" },
+        { "type": "packages", "key": "Pakete" },
+        { "type": "shell", "key": "Shell" },
+        { "type": "terminal", "key": "Terminal" },
+        { "type": "cpu", "key": "Prozessor" },
+        { "type": "gpu", "key": "Grafik" },
+        { "type": "memory", "key": "Speicher" },
+        { "type": "disk", "key": "Platte", "folders": "/var" },
+        { "type": "display", "key": "Schirm" },
+        "break",
+        "colors"
+    ]
+}

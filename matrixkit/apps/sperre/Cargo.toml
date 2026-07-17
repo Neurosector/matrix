@@ -1,0 +1,15 @@
+[package]
+name = "matrix-sperre"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Sperre — der Sperrschirm: echtes ext-session-lock + PAM"
+build = "build.rs"
+
+[dependencies]
+matrixkit-theme = { path = "../../matrixkit-theme" }
+matrixkit-widgets = { path = "../../matrixkit-widgets" }
+matrixkit-icons = { path = "../../matrixkit-icons" }
+iced = { version = "0.14", features = ["thread-pool", "image"] }
+iced_sessionlock = { git = "https://github.com/waycrate/exwlshelleventloop" }
+serde_json = "1"

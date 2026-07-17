@@ -1,0 +1,5 @@
+[Unit]
+Description=Sonnenstands-Rhythmus planen (Hell/Dunkel nach echtem Tag)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/matrix-sonne

@@ -1,0 +1,1 @@
+SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"

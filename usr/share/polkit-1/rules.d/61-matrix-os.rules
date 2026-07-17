@@ -1,0 +1,14 @@
+// Matrix OS-Pflege: rpm-ostree gehört dem Besitzer. Wheel-Nutzer in
+// einer lokalen aktiven Sitzung (und der Werkzeugweg über SSH im
+// eigenen LAN) dürfen Rebase/Upgrade ohne Passwort — der Matrix
+// Updater und die Image-Pipeline bauen darauf. Destruktives wie
+// Rollback-Löschen bleibt bei den Systemdefaults.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.projectatomic.rpmostree1.") == 0 &&
+        (action.id.endsWith(".rebase") ||
+         action.id.endsWith(".upgrade") ||
+         action.id.endsWith(".deploy")) &&
+        subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

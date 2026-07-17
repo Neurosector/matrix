@@ -1,0 +1,5 @@
+[Unit]
+Description=Matrix Gesundheitsbericht
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/matrix-gesundheit

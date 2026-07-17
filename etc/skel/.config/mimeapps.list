@@ -1,0 +1,5 @@
+[Default Applications]
+video/mp4=matrix-player.desktop
+video/webm=matrix-player.desktop
+video/x-matroska=matrix-player.desktop
+video/quicktime=matrix-player.desktop

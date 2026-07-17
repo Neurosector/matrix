@@ -1,0 +1,11 @@
+[package]
+name = "matrix-player"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Player — Videos ansehen, Bildschirmaufnahmen zuerst"
+
+[dependencies]
+matrixkit-theme = { path = "../../matrixkit-theme" }
+matrixkit-widgets = { path = "../../matrixkit-widgets" }
+iced = { version = "0.14", features = ["thread-pool", "image"] }

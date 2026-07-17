@@ -1,0 +1,46 @@
+#!/bin/bash
+# Sonnenstands-Rhythmus: berechnet heutige Sonnenzeiten und plant den
+# Hell/Dunkel-Wechsel. Laeuft taeglich frueh + bei Anmeldung (Catch-up inklusive).
+set -euo pipefail
+source "$HOME/.config/matrix/standort"
+read -r SUNRISE SUNSET <<< "$(python3 - "$LAT" "$LON" <<"PY"
+import sys, math, time
+lat, lon = float(sys.argv[1]), float(sys.argv[2])
+# NOAA-Naeherung, liefert lokale Zeiten (Minuten seit Mitternacht)
+def calc(rise):
+    n = time.localtime().tm_yday
+    lngHour = lon / 15.0
+    t = n + ((6 - lngHour) / 24 if rise else (18 - lngHour) / 24)
+    M = (0.9856 * t) - 3.289
+    L = (M + 1.916*math.sin(math.radians(M)) + 0.020*math.sin(math.radians(2*M)) + 282.634) % 360
+    RA = (math.degrees(math.atan(0.91764 * math.tan(math.radians(L))))) % 360
+    RA += (math.floor(L/90)*90 - math.floor(RA/90)*90); RA /= 15.0
+    sinDec = 0.39782 * math.sin(math.radians(L)); cosDec = math.cos(math.asin(sinDec))
+    cosH = (math.cos(math.radians(90.833)) - sinDec*math.sin(math.radians(lat))) / (cosDec*math.cos(math.radians(lat)))
+    cosH = max(-1.0, min(1.0, cosH))
+    H = (360 - math.degrees(math.acos(cosH))) if rise else math.degrees(math.acos(cosH))
+    H /= 15.0
+    T = H + RA - 0.06571*t - 6.622
+    UT = (T - lngHour) % 24
+    off = -time.timezone/3600 + (1 if time.localtime().tm_isdst else 0)
+    local = (UT + off) % 24
+    return int(local*60)
+print(calc(True), calc(False))
+PY
+)"
+fmt() { printf "%02d:%02d" $(($1/60)) $(($1%60)); }
+R=$(fmt "$SUNRISE"); S=$(fmt "$SUNSET")
+NOW=$(( $(date +%H) * 60 + $(date +%M) ))
+# Catch-up: aktuellen Modus korrekt setzen
+if [ "$NOW" -ge "$SUNRISE" ] && [ "$NOW" -lt "$SUNSET" ]; then WANT=light; else WANT=dark; fi
+CUR=$(dms ipc call theme getMode 2>/dev/null || echo "")
+[ "$CUR" != "$WANT" ] && dms ipc call theme "$WANT" >/dev/null 2>&1 || true
+# Heutige Wechsel planen (nur zukuenftige)
+plan() { # $1=HH:MM $2=light|dark
+    systemd-run --user --on-calendar="$(date +%F) $1:00" --unit="theme-sonne-$2" \
+        dms ipc call theme "$2" >/dev/null 2>&1 || true
+}
+systemctl --user stop theme-sonne-light.timer theme-sonne-dark.timer 2>/dev/null || true
+[ "$NOW" -lt "$SUNRISE" ] && plan "$R" light
+[ "$NOW" -lt "$SUNSET" ] && plan "$S" dark
+echo "Sonne heute: Aufgang $R, Untergang $S (Modus jetzt: $WANT)"

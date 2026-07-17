@@ -1,0 +1,5 @@
+[Unit]
+Description=DMS auf dark-Theme schalten
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dms ipc call theme dark

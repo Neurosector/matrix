@@ -1,0 +1,13 @@
+// Kopie von zirconium.kdl OHNE prefer-no-csd, damit Apps
+// ihre Titelleisten (Schliessen/Maximieren) zeichnen duerfen.
+include "binds-custom.kdl"
+include "/usr/share/zirconium/zdots/system/niri/includes/dms-base.kdl"
+include "/usr/share/zirconium/zdots/system/niri/includes/input.kdl"
+include "/usr/share/zirconium/zdots/system/niri/includes/layout.kdl"
+// Inhalt von misc.kdl, ohne prefer-no-csd:
+animations {}
+hotkey-overlay { skip-at-startup; }
+screenshot-path "~/Bilder/Bildschirmfotos/Bildschirmfoto %Y-%m-%d um %H.%M.%S.png"
+include "/usr/share/zirconium/zdots/system/niri/includes/shadow.kdl"
+include "/usr/share/zirconium/zdots/system/niri/includes/window-rules.kdl"
+include optional=true "/etc/niri/local.kdl"

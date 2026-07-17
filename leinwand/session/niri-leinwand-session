@@ -1,0 +1,12 @@
+#!/bin/sh
+# Matrix Leinwand-Sitzung — startet das gepatchte niri mit der
+# Leinwand-Config. Additiv; die normale Niri-Sitzung bleibt unberührt.
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment 2>/dev/null
+    command -v dbus-update-activation-environment >/dev/null 2>&1 && \
+        dbus-update-activation-environment --all 2>/dev/null
+fi
+for BIN in /usr/bin/niri-leinwand /usr/local/bin/niri-leinwand; do
+    [ -x "$BIN" ] && exec "$BIN" --session -c "$HOME/.config/niri/leinwand-session.kdl"
+done
+echo "niri-leinwand nicht gefunden" >&2; exit 1

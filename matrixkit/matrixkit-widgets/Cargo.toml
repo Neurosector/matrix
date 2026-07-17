@@ -1,0 +1,17 @@
+[package]
+name = "matrixkit-widgets"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Gemeinsame MatrixKit-Bausteine: Theme-Header, Resize-Griffe, Farb-Helfer"
+
+[dependencies]
+serde_json = "1"
+matrixkit-theme = { path = "../matrixkit-theme" }
+matrixkit-icons = { path = "../matrixkit-icons" }
+iced = { version = "0.14", features = ["thread-pool", "image", "advanced", "canvas"] }
+futures = "0.3"
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png"] }
+
+[features]
+bild = ["dep:image"]

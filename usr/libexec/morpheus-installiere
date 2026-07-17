@@ -1,0 +1,80 @@
+#!/bin/bash
+# Morpheus-Installations-Helfer (läuft als root via pkexec). Nimmt EIN
+# Argument: das Ziel-Blockgerät (/dev/sdX). Validiert streng, verweigert
+# das Boot-Medium, und ruft dann `bootc install to-disk --wipe`.
+set -uo pipefail
+LOG=/tmp/morpheus-install.log
+say() { echo "$*" | tee -a "$LOG"; }
+
+DEV="${1:-}"
+# 1) Strenge Form: /dev/ + nur Buchstaben/Ziffern (keine Partition, kein Pfad-Trick)
+if ! [[ "$DEV" =~ ^/dev/[a-z0-9]+$ ]]; then
+    say "Ungültiges Ziel: $DEV"; exit 1
+fi
+[ -b "$DEV" ] || { say "Kein Blockgerät: $DEV"; exit 1; }
+
+# 2) Niemals das Boot-Medium/Live-Gerät überschreiben
+BASE=$(basename "$DEV")
+for M in / /run/initramfs/live /run/media; do
+    SRC=$(findmnt -n -o SOURCE "$M" 2>/dev/null | head -1)
+    [ -n "$SRC" ] || continue
+    LBASE=$(lsblk -no pkname "$SRC" 2>/dev/null | head -1)
+    [ -n "$LBASE" ] || LBASE=$(basename "$SRC" | sed -E 's/p?[0-9]+$//')
+    if [ "$LBASE" = "$BASE" ]; then
+        say "Verweigert: $DEV ist das Boot-/Live-Medium."; exit 1
+    fi
+done
+
+say "Ziel bestätigt: $DEV ($(lsblk -dno SIZE "$DEV" 2>/dev/null))"
+say "Starte bootc install to-disk …"
+# Der eigentliche Schritt. bootc installiert das LAUFENDE Abbild.
+bootc install to-disk --wipe "$DEV" 2>&1 | tee -a "$LOG"
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    say "bootc install fehlgeschlagen (Code $RC)."
+    exit "$RC"
+fi
+say "bootc install erfolgreich."
+
+# ---- Morpheus (R74): das erste Konto — den Standard-Installers Kern-Aufgabe --------------
+# /tmp/morpheus-konto: 3 Zeilen (Rechnername, Benutzername, sha512crypt-Hash),
+# geschrieben von der App. Streng validieren, im Deployment anlegen, löschen.
+KONTO=/tmp/morpheus-konto
+if [ -f "$KONTO" ]; then
+    RECHNER=$(sed -n 1p "$KONTO")
+    NUTZER=$(sed -n 2p "$KONTO")
+    HASH=$(sed -n 3p "$KONTO")
+    if ! [[ "$RECHNER" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] \
+       || ! [[ "$NUTZER" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+       || ! [[ "$HASH" =~ ^\$6\$ ]]; then
+        say "Konto-Daten ungültig — übersprungen (Anlage später am Gerät)."
+    else
+        MNT=$(mktemp -d)
+        # Wurzel = größte Partition des Ziels (bootc-Layout: EFI, boot, root).
+        PART=$(lsblk -nrbo NAME,SIZE "$DEV" | tail -n +2 | sort -k2 -n | tail -1 | cut -d' ' -f1)
+        if [ -n "$PART" ] && mount "/dev/$PART" "$MNT" 2>>"$LOG"; then
+            STATE=$(ls -d "$MNT"/ostree/deploy/*/ 2>/dev/null | head -1)
+            DEPLOY=$(ls -d "$STATE"deploy/*.0 2>/dev/null | head -1)
+            if [ -n "$DEPLOY" ] && [ -f "$DEPLOY/etc/passwd" ]; then
+                say "Konto $NUTZER auf „$RECHNER“ anlegen …"
+                echo "$RECHNER" > "$DEPLOY/etc/hostname"
+                useradd --prefix "$DEPLOY" -M -d "/var/home/$NUTZER" \
+                        -s /bin/bash -G wheel -p "$HASH" "$NUTZER" 2>&1 | tee -a "$LOG"
+                UIDGID=$(awk -F: -v u="$NUTZER" '$1==u {print $3":"$4}' "$DEPLOY/etc/passwd")
+                VARHOME="$STATE/var/home/$NUTZER"
+                mkdir -p "$VARHOME"
+                cp -rT "$DEPLOY/etc/skel" "$VARHOME" 2>/dev/null || true
+                [ -n "$UIDGID" ] && chown -R "$UIDGID" "$VARHOME"
+                say "Konto angelegt."
+            else
+                say "Deployment nicht gefunden — Konto-Anlage übersprungen."
+            fi
+            umount "$MNT" 2>/dev/null || true
+        else
+            say "Wurzel-Partition nicht einhängbar — Konto-Anlage übersprungen."
+        fi
+        rmdir "$MNT" 2>/dev/null || true
+    fi
+    rm -f "$KONTO"
+fi
+exit 0

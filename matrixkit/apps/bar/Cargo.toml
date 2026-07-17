@@ -1,0 +1,15 @@
+[package]
+name = "matrix-bar"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Bar — die Leiste am oberen Rand: Fokus, Uhr, Systempuls"
+
+[dependencies]
+matrixkit-theme = { path = "../../matrixkit-theme" }
+matrixkit-widgets = { path = "../../matrixkit-widgets" }
+matrixkit-icons = { path = "../../matrixkit-icons" }
+iced = { version = "0.14", features = ["thread-pool"] }
+iced_layershell = "0.18"
+sysinfo = "0.32"
+zbus = "5"

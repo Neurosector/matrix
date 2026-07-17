@@ -1,0 +1,28 @@
+#!/bin/bash
+# Woechentlicher Selbst-Check: prueft die Vitalwerte des Systems und meldet
+# sich NUR bei Befund (Philosophie: unsichtbare Wartung).
+set -uo pipefail
+B=""
+add() { B="$B\n• $1"; }
+st=$(systemctl is-system-running 2>/dev/null)
+[ "$st" != "running" ] && add "Systemzustand: $st"
+f=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+[ "$f" -gt 0 ] && add "$f fehlgeschlagene System-Dienste"
+fu=$(systemctl --user --failed --no-legend 2>/dev/null | wc -l)
+[ "$fu" -gt 0 ] && add "$fu fehlgeschlagene Benutzer-Dienste"
+cd7=$(coredumpctl list --since "-7 days" --no-legend 2>/dev/null | wc -l)
+[ "$cd7" -gt 0 ] && add "$cd7 Programmabstuerze in 7 Tagen (coredumpctl list)"
+duse=$(df --output=pcent /sysroot 2>/dev/null | tail -1 | tr -dc "0-9")
+[ "${duse:-0}" -ge 85 ] && add "Systemplatte zu ${duse}% voll"
+hom=$(df --output=pcent /var/home 2>/dev/null | tail -1 | tr -dc "0-9")
+[ "${hom:-0}" -ge 85 ] && add "Home zu ${hom}% voll"
+je=$(journalctl -b -p err --no-pager 2>/dev/null | grep -vcE "^--|cupsd|bluetoothd|SGX")
+[ "${je:-0}" -gt 5 ] && add "$je Fehlermeldungen im aktuellen Boot-Journal"
+if journalctl -u uupd --since "-8 days" --no-pager 2>/dev/null | grep -q "finished with errors"; then
+  add "Auto-Update meldete Fehler (journalctl -u uupd)"
+fi
+REPORT=/var/tmp/matrix-gesundheit-$(date +%F).txt
+{ echo "Matrix Gesundheitsbericht $(date "+%F %H:%M")"; echo -e "${B:-\n• Alles in Ordnung ✔}"; } > "$REPORT"
+if [ -n "$B" ]; then
+  notify-send -u critical -a Matrix "Gesundheitsbericht: Befunde" "$(echo -e "$B" | head -6)\n\nDetails: $REPORT"
+fi

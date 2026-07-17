@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["matrixkit-theme", "matrixkit-icons", "matrixkit-widgets", "apps/sysmon", "apps/farben", "apps/klaenge", "apps/hilfe", "wachter", "apps/codes", "schluessel", "apps/schluessel", "wache", "apps/wiederherstellung", "apps/einstellungen", "apps/updater", "apps/dock", "apps/bar", "apps/zentrale", "apps/start", "apps/osd", "apps/greeter", "apps/web", "apps/web-inhalt", "apps/kontext", "apps/mitteilungen", "apps/sperre", "apps/hintergrund", "apps/icons", "apps/wachdienst", "apps/dateien", "apps/morpheus", "apps/tastatur", "apps/terminal", "apps/aufnahme", "apps/player"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = true
+strip = true

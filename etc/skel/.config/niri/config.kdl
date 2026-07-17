@@ -1,0 +1,10 @@
+// Matrix — Benutzer-Grundconfig (überschreibt die DMS-Vorlage der
+// Zirconium-Basis im skel: neue Benutzer starten OHNE DMS, mit der
+// MatrixKit-Shell aus local.kdl).
+
+// Systemweite Zirconium-Grundeinstellungen
+include "/usr/share/zirconium/zdots/system/niri/zirconium.kdl"
+
+// Matrix: Autostart (Bar, Dock, Mitteilungen, Hintergrund, Wachdienst),
+// Binds und Paletten-Einbindung
+include "local.kdl"

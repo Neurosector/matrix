@@ -1,0 +1,7 @@
+[Unit]
+Description=KDE-Farben mit DMS-Theme synchron halten
+[Path]
+PathChanged=%h/.local/share/color-schemes/DankMatugenDark.colors
+PathChanged=%h/.local/share/color-schemes/DankMatugenLight.colors
+[Install]
+WantedBy=default.target

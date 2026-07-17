@@ -1,0 +1,9 @@
+[Unit]
+Description=Matrix Home-Snapshot (btrfs Zeitmaschinen-Leitbild)
+ConditionPathIsMountPoint=/home
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/matrix-home-snapshot
+Nice=15
+IOSchedulingClass=idle

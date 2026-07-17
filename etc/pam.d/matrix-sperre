@@ -1,0 +1,4 @@
+# Matrix Sperrschirm — prüft das Passwort des angemeldeten Nutzers
+# über die System-Authentifizierung (wie swaylock/gtklock).
+auth       include      system-auth
+account    include      system-auth

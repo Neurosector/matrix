@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Updater
+GenericName=Softwareupdate
+Comment=Das Betriebssystem prüfen und aktualisieren — ein Klick, ein Neustart
+Exec=/usr/bin/matrix-updater
+Icon=matrix-updater
+Terminal=false
+Categories=Settings;System;
+Keywords=update;updater;aktualisieren;software;system;matrix;

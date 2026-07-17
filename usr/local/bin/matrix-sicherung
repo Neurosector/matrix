@@ -1,0 +1,51 @@
+#!/bin/bash
+# Matrix-Sicherung: Home-Backup auf die interne HDD (sdb1, „Samsung HDD").
+# Quelle = der NEUESTE btrfs-Snapshot (konsistent, eingefroren); Ziel =
+# hardlink-inkrementelle Ordner-Historie (Time-Machine-Muster auf ext4) —
+# jede Sicherung sieht aus wie ein Vollbackup, braucht aber nur den Platz
+# der Änderungen. Die HDD liegt VOLLER NUTZERDATEN: es wird ausschließlich
+# in den Ordner „Matrix Time Machine" geschrieben, nie formatiert.
+set -euo pipefail
+
+PLATTE_UUID="1635fe50-0ad7-43a3-8608-5328403b1f59"
+ZIEL_MNT=/var/mnt/sicherung
+ZIEL="$ZIEL_MNT/Matrix Time Machine"
+SNAPDIR=/home/.snapshots
+BEHALTEN=10
+
+# Neuesten Snapshot als Quelle (falls keiner: frisch anlegen)
+QUELLE=$(ls -1d "$SNAPDIR"/home-* 2>/dev/null | sort | tail -1 || true)
+if [ -z "$QUELLE" ]; then
+    /usr/local/bin/matrix-home-snapshot
+    QUELLE=$(ls -1d "$SNAPDIR"/home-* | sort | tail -1)
+fi
+
+# HDD nur fürs Backup mounten (nofail-Geist: fehlt sie, stiller Abbruch)
+mkdir -p "$ZIEL_MNT"
+if ! mountpoint -q "$ZIEL_MNT"; then
+    mount UUID="$PLATTE_UUID" "$ZIEL_MNT" || { echo "Sicherungsplatte nicht da — übersprungen"; exit 0; }
+    SELBST_GEMOUNTET=1
+fi
+trap '[ "${SELBST_GEMOUNTET:-0}" = 1 ] && umount "$ZIEL_MNT" 2>/dev/null || true' EXIT
+
+mkdir -p "$ZIEL"
+NEU="$ZIEL/$(basename "$QUELLE")"
+LETZTE=$(ls -1d "$ZIEL"/home-* 2>/dev/null | sort | tail -1 || true)
+
+# rsync: Hardlinks gegen die letzte Sicherung; Caches/Build-Reste raus
+LINKDEST=()
+[ -n "$LETZTE" ] && LINKDEST=(--link-dest="$LETZTE")
+rsync -a --delete "${LINKDEST[@]}" \
+    --exclude='.cache/' \
+    --exclude='.local/share/containers/' \
+    --exclude='.local/share/Trash/' \
+    --exclude='**/target/release/' \
+    --exclude='**/target/debug/' \
+    --exclude='.snapshots/' \
+    "$QUELLE"/ "$NEU"/
+
+# Rotation auf der HDD
+ls -1d "$ZIEL"/home-* 2>/dev/null | sort | head -n -"$BEHALTEN" | while read -r alt; do
+    rm -rf "$alt"
+done
+echo "Sicherung fertig: $NEU"

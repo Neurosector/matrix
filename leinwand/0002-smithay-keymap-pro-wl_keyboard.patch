@@ -1,0 +1,165 @@
+From 2c489a268e90512b76792fb2a796f4e2f0c04a49 Mon Sep 17 00:00:00 2001
+From: Neurosector <Neurosector@users.noreply.github.com>
+Date: Thu, 16 Jul 2026 03:28:04 +0200
+Subject: [PATCH] input/keyboard: track last-sent keymap per wl_keyboard
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+send_keymap deduplicated keymaps with a single seat-global KeymapFileId.
+A wl_keyboard bound after a keymap change (e.g. a virtual-keyboard
+upload) only receives the seat keymap in new_kbd, but the seat-global id
+already points at the new keymap — later send_keymap calls with that
+keymap were dropped for the new resource, so clients interpreted
+virtual-keyboard keys with the wrong keymap.
+
+Track the last-sent keymap id per wl_keyboard resource instead and send
+to exactly the resources that have not seen the keymap yet.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ src/input/keyboard/mod.rs    | 53 ++++++++++++++++++++++++++----------
+ src/wayland/seat/keyboard.rs | 14 ++++++++--
+ src/wayland/seat/mod.rs      |  1 +
+ 3 files changed, 52 insertions(+), 16 deletions(-)
+
+diff --git a/src/input/keyboard/mod.rs b/src/input/keyboard/mod.rs
+index 3fa1a7d9..77561bd8 100644
+--- a/src/input/keyboard/mod.rs
++++ b/src/input/keyboard/mod.rs
+@@ -744,38 +744,63 @@ impl<D: SeatHandler + 'static> KeyboardHandle<D> {
+         use tracing::warn;
+         use wayland_server::{Resource, protocol::wl_keyboard::KeymapFormat};
+ 
+-        // Ignore request which do not change the keymap.
++        use crate::wayland::seat::keyboard::KeyboardUserData;
++
+         let new_id = keymap_file.id();
+-        if new_id == *self.arc.active_keymap.read().unwrap() {
+-            return false;
++        let changed = new_id != *self.arc.active_keymap.read().unwrap();
++        if changed {
++            *self.arc.active_keymap.write().unwrap() = new_id;
+         }
+-        *self.arc.active_keymap.write().unwrap() = new_id;
+ 
+-        // Update keymap for every wl_keyboard.
++        // Update keymap for every wl_keyboard which has not received it yet.
++        // Deduplication is tracked per resource, not per seat: a wl_keyboard
++        // bound after the last keymap change was only sent the seat keymap
++        // (see `new_kbd`), even if the seat-wide active keymap is already a
++        // different one.
++        let mut sent_any = false;
+         let known_kbds = &self.arc.known_kbds;
+         for kbd in &*known_kbds.lock().unwrap() {
+             let Ok(kbd) = kbd.upgrade() else {
+                 continue;
+             };
+ 
++            let last_sent = kbd
++                .data::<KeyboardUserData<D>>()
++                .map(|data| data.last_sent_keymap.lock().unwrap());
++            if let Some(ref last_sent) = last_sent {
++                if **last_sent == Some(new_id) {
++                    continue;
++                }
++            }
++
+             let res = keymap_file.with_fd(kbd.version() >= 7, |fd, size| {
+                 kbd.keymap(KeymapFormat::XkbV1, fd.as_fd(), size as u32)
+             });
+-            if let Err(e) = res {
+-                warn!(
+-                    err = ?e,
+-                    "Failed to send keymap to client"
+-                );
++            match res {
++                Ok(_) => {
++                    if let Some(mut last_sent) = last_sent {
++                        *last_sent = Some(new_id);
++                    }
++                    sent_any = true;
++                }
++                Err(e) => {
++                    warn!(
++                        err = ?e,
++                        "Failed to send keymap to client"
++                    );
++                }
+             }
+         }
+ 
+         // Send updated modifiers.
+-        let seat = self.get_seat(data);
+-        if let Some(focus) = focus {
+-            focus.modifiers(&seat, data, mods, SERIAL_COUNTER.next_serial());
++        if changed || sent_any {
++            let seat = self.get_seat(data);
++            if let Some(focus) = focus {
++                focus.modifiers(&seat, data, mods, SERIAL_COUNTER.next_serial());
++            }
+         }
+ 
+-        true
++        changed
+     }
+ 
+     fn update_xkb_state(&self, data: &mut D, keymap: xkb::Keymap) {
+diff --git a/src/wayland/seat/keyboard.rs b/src/wayland/seat/keyboard.rs
+index fda28641..2d304916 100644
+--- a/src/wayland/seat/keyboard.rs
++++ b/src/wayland/seat/keyboard.rs
+@@ -1,4 +1,4 @@
+-use std::{cell::RefCell, fmt};
++use std::{cell::RefCell, fmt, sync::Mutex};
+ 
+ use tracing::{instrument, trace, warn};
+ use wayland_server::{
+@@ -15,7 +15,7 @@ use crate::{
+     backend::input::{KeyState, Keycode},
+     input::{
+         Seat, SeatHandler, SeatState, WeakSeat,
+-        keyboard::{KeyboardHandle, KeyboardTarget, KeysymHandle, ModifiersState},
++        keyboard::{KeyboardHandle, KeyboardTarget, KeymapFileId, KeysymHandle, ModifiersState},
+     },
+     utils::{HookId, Serial, iter::new_locked_obj_iter_from_vec},
+     wayland::{
+@@ -69,6 +69,9 @@ where
+             );
+             return;
+         };
++        if let Some(data) = kbd.data::<KeyboardUserData<D>>() {
++            *data.last_sent_keymap.lock().unwrap() = Some(keymap_file.id());
++        }
+ 
+         let guard = self.arc.internal.lock().unwrap();
+         if kbd.version() >= 4 {
+@@ -106,6 +109,13 @@ impl<D: SeatHandler + 'static> KeyboardHandle<D> {
+ /// User data for keyboard
+ pub struct KeyboardUserData<D: SeatHandler> {
+     pub(crate) handle: Option<KeyboardHandle<D>>,
++    /// Id of the keymap most recently sent to this wl_keyboard.
++    ///
++    /// Keymap deduplication has to be tracked per resource, not per seat: a
++    /// wl_keyboard bound after a keymap change (e.g. a virtual keyboard
++    /// upload) has only received the seat keymap, even though the seat-wide
++    /// active keymap is already a different one.
++    pub(crate) last_sent_keymap: Mutex<Option<KeymapFileId>>,
+ }
+ 
+ impl<D: SeatHandler> fmt::Debug for KeyboardUserData<D> {
+diff --git a/src/wayland/seat/mod.rs b/src/wayland/seat/mod.rs
+index e1eed7ce..f30e733d 100644
+--- a/src/wayland/seat/mod.rs
++++ b/src/wayland/seat/mod.rs
+@@ -317,6 +317,7 @@ where
+                     id,
+                     KeyboardUserData {
+                         handle: inner.keyboard.clone(),
++                        last_sent_keymap: Default::default(),
+                     },
+                 );
+ 
+-- 
+2.55.0
+

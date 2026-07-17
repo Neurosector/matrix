@@ -1,0 +1,7 @@
+[Unit]
+Description=Taegliche Sonnenplanung (00:05)
+[Timer]
+OnCalendar=*-*-* 00:05
+Persistent=true
+[Install]
+WantedBy=timers.target

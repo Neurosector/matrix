@@ -1,0 +1,5 @@
+[Unit]
+Description=kdeglobals aus DankMatugen-Schema aktualisieren
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/sync-kdeglobals.sh

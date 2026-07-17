@@ -1,0 +1,13 @@
+[package]
+name = "matrix-updater"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Matrix Updater — Softwareupdate im MatrixKit-Stil"
+
+[dependencies]
+iced = { version = "0.14", features = ["thread-pool"] }
+matrixkit-theme = { path = "../../matrixkit-theme" }
+matrixkit-widgets = { path = "../../matrixkit-widgets" }
+matrixkit-icons = { path = "../../matrixkit-icons" }
+serde_json = "1"

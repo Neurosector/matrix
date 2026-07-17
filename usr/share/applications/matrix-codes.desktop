@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Codes
+GenericName=2FA-Authenticator
+Comment=Zwei-Faktor-Codes (TOTP) anzeigen und kopieren
+Exec=/usr/bin/matrix-codes
+Icon=matrix-codes
+Terminal=false
+Categories=Utility;Security;
+Keywords=2fa;totp;authenticator;code;otp;matrix;

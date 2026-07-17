@@ -1,0 +1,18 @@
+[config]
+
+# User-Templates — von DMS bei jedem Theme-Wechsel ausgefuehrt
+[templates.dmsfirefox]
+input_path = "/usr/share/quickshell/dms/matugen/templates/firefox-userchrome.css"
+output_path = "~/.config/mozilla/firefox/PROFIL.default-release/chrome/userChrome.css"
+
+[templates.pywal]
+input_path = "~/.config/matugen/templates/pywal-colors.json"
+output_path = "~/.cache/wal/colors.json"
+
+[templates.matrix-palette]
+input_path = "~/.config/matugen/templates/matrix-palette.json"
+output_path = "~/.cache/DankMaterialShell/dms-colors.json"
+
+[templates.matrix-niri]
+input_path = "~/.config/matugen/templates/matrix-niri.kdl"
+output_path = "~/.config/niri/dms/colors.kdl"

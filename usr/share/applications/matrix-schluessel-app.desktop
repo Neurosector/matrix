@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Schlüssel
+GenericName=Login-Schlüssel
+Comment=USB-Stick als Login-Schlüssel einrichten (Stick oder Passwort)
+Exec=/usr/bin/matrix-schluessel-app
+Icon=matrix-schluessel-app
+Terminal=false
+Categories=Settings;Security;
+Keywords=usb;schlüssel;key;login;2fa;anmeldung;matrix;

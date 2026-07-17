@@ -1,0 +1,7 @@
+[Unit]
+Description=Dunkles Theme ab 19:00
+[Timer]
+OnCalendar=*-*-* 19:00
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Einstellungen
+GenericName=Systemeinstellungen
+Comment=Erscheinungsbild, Anzeige und Verhalten des Systems einstellen
+Exec=/usr/bin/matrix-einstellungen
+Icon=matrix-einstellungen
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=einstellungen;settings;system;anzeige;erscheinungsbild;matrix;

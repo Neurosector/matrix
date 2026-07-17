@@ -1,0 +1,9 @@
+[Unit]
+Description=Matrix-Sicherung: Home-Backup auf die interne HDD
+ConditionPathExists=/dev/disk/by-uuid/1635fe50-0ad7-43a3-8608-5328403b1f59
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/matrix-sicherung
+Nice=19
+IOSchedulingClass=idle

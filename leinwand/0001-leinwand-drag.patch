@@ -1,0 +1,1995 @@
+diff --git a/niri-config/src/gestures.rs b/niri-config/src/gestures.rs
+index dcf296ac..891d5e16 100644
+--- a/niri-config/src/gestures.rs
++++ b/niri-config/src/gestures.rs
+@@ -6,6 +6,9 @@ pub struct Gestures {
+     pub dnd_edge_view_scroll: DndEdgeViewScroll,
+     pub dnd_edge_workspace_switch: DndEdgeWorkspaceSwitch,
+     pub hot_corners: HotCorners,
++    /// Matrix Leinwand: Links-Ziehen auf dem Leerraum schwenkt die Sicht
++    /// in alle Richtungen (2D-Pan über Spalten und Arbeitsflächen).
++    pub leinwand_drag: bool,
+ }
+ 
+ #[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+@@ -16,6 +19,8 @@ pub struct GesturesPart {
+     pub dnd_edge_workspace_switch: Option<DndEdgeWorkspaceSwitchPart>,
+     #[knuffel(child)]
+     pub hot_corners: Option<HotCorners>,
++    #[knuffel(child)]
++    pub leinwand_drag: bool,
+ }
+ 
+ impl MergeWith<GesturesPart> for Gestures {
+@@ -26,6 +31,7 @@ impl MergeWith<GesturesPart> for Gestures {
+             dnd_edge_workspace_switch,
+         );
+         merge_clone!((self, part), hot_corners);
++        self.leinwand_drag |= part.leinwand_drag;
+     }
+ }
+ 
+diff --git a/src/input/leinwand.rs b/src/input/leinwand.rs
+new file mode 100644
+index 00000000..c734027e
+--- /dev/null
++++ b/src/input/leinwand.rs
+@@ -0,0 +1,280 @@
++//! Matrix Leinwand — die Leerraum-Gesten (R46: aus input/mod.rs
++//! herausgehoben). Maus-Drag (2D-Pan), Klick-holt, Rechtsklick-Menü,
++//! Rad-/Finger-Blättern mit Klebe-Puffer, Ein-Finger-Touch-Wisch.
++//! Kind-Modul von input — sieht dessen private Helfer.
++
++use smithay::backend::input::{AxisSource, MouseButton, TouchSlot};
++use smithay::input::pointer::{CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData};
++use smithay::utils::{Logical, Point, Serial};
++
++use super::modifiers_from_state;
++use super::spatial_movement_grab::SpatialMovementGrab;
++use crate::leinwand::leerraum;
++use crate::niri::{PointContents, State};
++
++/// Fokus von außen (Dock-Klick, Fenster-Geist): die Kamera fährt zum
++/// Fenster — dieselbe Fahrt wie der Leinwand-Klick (Task #33).
++pub fn fokus_kamera(state: &mut State, window: &smithay::desktop::Window) {
++    if state.niri.config.borrow().gestures.leinwand_drag
++        && crate::utils::matrix_schalter_an("leinwand-klick-holt")
++        && state.niri.layout.leinwand_fenster_zeigen(window)
++    {
++        // FIXME: granular.
++        state.niri.queue_redraw_all();
++    }
++}
++
++/// Links-Ziehen auf dem LEERRAUM schwenkt die Sicht in alle Richtungen —
++/// der Desktop als unendliche Leinwand. true = Grab gesetzt, Ereignis
++/// verzehrt. Aktivierung: gestures { leinwand-drag } in der Config.
++pub fn drag_start(
++    state: &mut State,
++    button: Option<MouseButton>,
++    button_code: u32,
++    serial: Serial,
++    is_overview_open: bool,
++) -> bool {
++    if button != Some(MouseButton::Left) {
++        return false;
++    }
++    let pointer = state.niri.seat.get_pointer().unwrap();
++    if pointer.is_grabbed()
++        || is_overview_open
++        || !state.niri.config.borrow().gestures.leinwand_drag
++    {
++        return false;
++    }
++    let location = pointer.current_location();
++    let under = state.niri.contents_under(location);
++    if !leerraum(&under) {
++        return false;
++    }
++    let output_ws = state.niri.output_under_cursor().and_then(|output| {
++        let mon = state.niri.layout.monitor_for_output(&output)?;
++        Some((output, mon.active_workspace_ref().id()))
++    });
++    let Some((output, ws_id)) = output_ws else {
++        return false;
++    };
++    state.niri.layout.focus_output(&output);
++    let start_data = PointerGrabStartData {
++        focus: None,
++        button: button_code,
++        location,
++    };
++    let grab = SpatialMovementGrab::new_leinwand(start_data, output, ws_id);
++    pointer.set_grab(state, grab, serial, Focus::Clear);
++    state
++        .niri
++        .cursor_manager
++        .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
++    state.niri.queue_redraw_all();
++    true
++}
++
++/// Klick auf ein ANGESCHNITTENES Fenster fährt es ganz in die Sicht —
++/// voll sichtbare Fenster bleiben ruhig, damit Arbeitsklicks die
++/// Kamera nie verreißen.
++pub fn klick_holt(state: &mut State, is_overview_open: bool, mod_down: bool) {
++    let pointer = state.niri.seat.get_pointer().unwrap();
++    if is_overview_open
++        || mod_down
++        || pointer.is_grabbed()
++        || !state.niri.config.borrow().gestures.leinwand_drag
++        || !crate::utils::matrix_schalter_an("leinwand-klick-holt")
++    {
++        return;
++    }
++    let fenster = state.niri.window_under_cursor().map(|m| m.window.clone());
++    if let Some(win) = fenster {
++        if state.niri.layout.leinwand_fenster_zeigen(&win) {
++            // FIXME: granular.
++            state.niri.queue_redraw_all();
++        }
++    }
++}
++
++/// Rechtsklick auf den LEERRAUM öffnet das Desktop-Kontextmenü
++/// (matrix-kontext) — der Compositor liefert nur Ort und Anlass.
++/// Leisten-Flächen (Dock/Bar) zählen nicht als Leerraum (Fund 8.7.).
++pub fn rechtsklick_kontext(
++    state: &mut State,
++    button: Option<MouseButton>,
++    is_overview_open: bool,
++    mod_down: bool,
++) {
++    let pointer = state.niri.seat.get_pointer().unwrap();
++    if button != Some(MouseButton::Right)
++        || is_overview_open
++        || mod_down
++        || pointer.is_grabbed()
++        || !state.niri.config.borrow().gestures.leinwand_drag
++        || state.niri.window_under_cursor().is_some()
++    {
++        return;
++    }
++    let pos = pointer.current_location();
++    let auf_leiste = state.niri.output_under(pos).is_some_and(|(output, pos_in_out)| {
++        use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
++        let layers = smithay::desktop::layer_map_for_output(output);
++        [WlrLayer::Overlay, WlrLayer::Top, WlrLayer::Bottom]
++            .iter()
++            .any(|l| {
++                layers.layers_on(*l).any(|ls| {
++                    layers
++                        .layer_geometry(ls)
++                        .is_some_and(|g| g.to_f64().contains(pos_in_out))
++                })
++            })
++    });
++    if auf_leiste {
++        return;
++    }
++    crate::utils::spawning::spawn(
++        vec![
++            "sh".to_string(),
++            "-c".to_string(),
++            format!(
++                "PATH=$HOME/.local/bin:/usr/bin:$PATH exec matrix-kontext leinwand {} {}",
++                pos.x as i32, pos.y as i32
++            ),
++        ],
++        None,
++    );
++}
++
++/// MAUSRAD ODER TRACKPAD auf dem LEERRAUM blättert durch die Fenster —
++/// mit Klebe-Puffer (1 s ab letztem Tick, 24 px Standruhe). true =
++/// Ereignis gehört der Leinwand.
++pub fn rad_blaettern(
++    state: &mut State,
++    source: AxisSource,
++    vertical_amount_v120: Option<f64>,
++    vertical_px: f64,
++    is_overview_open: bool,
++    is_mru_open: bool,
++) -> bool {
++    if !(source == AxisSource::Wheel || source == AxisSource::Finger)
++        || is_overview_open
++        || is_mru_open
++        || !state.niri.config.borrow().gestures.leinwand_drag
++    {
++        return false;
++    }
++    let pointer = state.niri.seat.get_pointer().unwrap();
++    if pointer.is_grabbed() {
++        return false;
++    }
++    let mods = state.niri.seat.get_keyboard().unwrap().modifier_state();
++    if !modifiers_from_state(mods).is_empty() {
++        return false;
++    }
++    let location = pointer.current_location();
++    let under = state.niri.contents_under(location);
++    // Klebe-Puffer: Nach einem Blättern zentriert die Kamera — dabei
++    // kann ein Fenster unter die STEHENDE Maus rutschen. Solange der
++    // Zeiger (fast) am selben Ort steht und der letzte Blätter-Tick
++    // keine Sekunde her ist, gehört das Rad weiter der Leinwand;
++    // jeder Tick frischt die Frist auf. (Nutzer-Flow-Fund, 13.7.)
++    let klebt = state.niri.leinwand_blaettern_zuletzt.is_some_and(|(zeit, ort)| {
++        zeit.elapsed().as_millis() < 1000 && {
++            let d = location - ort;
++            d.x * d.x + d.y * d.y <= 24.0 * 24.0
++        }
++    });
++    if !(leerraum(&under) || klebt) {
++        return false;
++    }
++    let ticks = if source == AxisSource::Wheel {
++        let vertical = vertical_amount_v120.unwrap_or(0.);
++        state.niri.vertical_wheel_tracker.accumulate(vertical)
++    } else {
++        state.niri.leinwand_finger_roll += vertical_px;
++        let schritte = (state.niri.leinwand_finger_roll / 60.0).trunc() as i8;
++        if schritte != 0 {
++            state.niri.leinwand_finger_roll -= f64::from(schritte) * 60.0;
++        }
++        schritte
++    };
++    if ticks != 0 && crate::utils::matrix_schalter_an("leinwand-blaettern") {
++        let richtung = if ticks > 0 { 1 } else { -1 };
++        for _ in 0..ticks.abs() {
++            if let Some(id) = state.niri.layout.leinwand_blaettern(richtung) {
++                state.niri.layout.activate_window(&id);
++            }
++        }
++        // Der Fenster-Geist zeigt sich zum Blättern.
++        state.niri.fenster_geist.aktivieren();
++        // Klebe-Frist auffrischen: 1 s ab dem LETZTEN Tick.
++        state.niri.leinwand_blaettern_zuletzt =
++            Some((std::time::Instant::now(), location));
++        // FIXME: granular.
++        state.niri.queue_redraw_all();
++    }
++    true
++}
++
++/// EIN-FINGER-WISCH auf leerem Leinwandraum startet das Touch-Blättern —
++/// die App darunter sieht nie ein Down. true = Wisch übernommen.
++pub fn wisch_start(
++    state: &mut State,
++    slot: TouchSlot,
++    pos: Point<f64, Logical>,
++    under: &PointContents,
++    mods_leer: bool,
++) -> bool {
++    let Some(handle) = state.niri.seat.get_touch() else {
++        return false;
++    };
++    if !state.niri.config.borrow().gestures.leinwand_drag
++        || handle.is_grabbed()
++        || state.niri.leinwand_wisch.is_some()
++        || state.niri.screenshot_ui.is_open()
++        || state.niri.window_mru_ui.is_open()
++        || state.niri.layout.is_overview_open()
++        || !mods_leer
++        || !leerraum(under)
++    {
++        return false;
++    }
++    state.niri.leinwand_wisch = Some((slot, pos.y, 0.0));
++    true
++}
++
++/// Wisch-Ende: nichts an die App weiterreichen. true = verzehrt.
++pub fn wisch_ende(state: &mut State, slot: TouchSlot) -> bool {
++    if state.niri.leinwand_wisch.is_some_and(|(wslot, ..)| wslot == slot) {
++        state.niri.leinwand_wisch = None;
++        return true;
++    }
++    false
++}
++
++/// Laufender Wisch: alle 90 px ein Blätter-Schritt. Finger nach OBEN =
++/// vorwärts (Handy-Logik). true = Bewegung gehört der Leinwand.
++pub fn wisch_schritt(state: &mut State, slot: TouchSlot, pos: Point<f64, Logical>) -> bool {
++    let Some((wslot, letzte_y, sammler)) = state.niri.leinwand_wisch else {
++        return false;
++    };
++    if wslot != slot {
++        return false;
++    }
++    const SCHWELLE: f64 = 90.0;
++    let mut sammler = sammler + (pos.y - letzte_y);
++    let schritte = (sammler / SCHWELLE).trunc() as i32;
++    if schritte != 0 {
++        sammler -= f64::from(schritte) * SCHWELLE;
++        if crate::utils::matrix_schalter_an("leinwand-blaettern") {
++            let richtung = if schritte > 0 { -1 } else { 1 };
++            for _ in 0..schritte.unsigned_abs() {
++                if let Some(id) = state.niri.layout.leinwand_blaettern(richtung) {
++                    state.niri.layout.activate_window(&id);
++                }
++            }
++            state.niri.fenster_geist.aktivieren();
++            state.niri.queue_redraw_all();
++        }
++    }
++    state.niri.leinwand_wisch = Some((wslot, pos.y, sammler));
++    true
++}
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 50567530..a424a150 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -55,6 +55,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
+ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
+ 
+ pub mod backend_ext;
++pub(crate) mod leinwand;
+ pub mod move_grab;
+ pub mod pick_color_grab;
+ pub mod pick_window_grab;
+@@ -874,6 +875,8 @@ impl State {
+                 let window = window.map(|(_, m)| m.window.clone());
+                 if let Some(window) = window {
+                     self.focus_window(&window);
++                    // Matrix Leinwand (R46): Kamera fährt mit (input/leinwand.rs).
++                    leinwand::fokus_kamera(self, &window);
+                 }
+             }
+             Action::FocusWindowInColumn(index) => {
+@@ -2888,6 +2891,13 @@ impl State {
+                 }
+             }
+ 
++            // Matrix Leinwand (R46): Leerraum-Gesten wohnen in input/leinwand.rs.
++            if leinwand::drag_start(self, button, button_code, serial, is_overview_open) {
++                return;
++            }
++            leinwand::klick_holt(self, is_overview_open, mod_down);
++            leinwand::rechtsklick_kontext(self, button, is_overview_open, mod_down);
++
+             if let Some(mapped) = self.niri.window_under_cursor() {
+                 let window = mapped.window.clone();
+ 
+@@ -3113,6 +3123,18 @@ impl State {
+ 
+         let is_mru_open = self.niri.window_mru_ui.is_open();
+ 
++        // Matrix Leinwand (R46): Blättern wohnt in input/leinwand.rs.
++        if leinwand::rad_blaettern(
++            self,
++            source,
++            vertical_amount_v120,
++            event.amount(Axis::Vertical).unwrap_or(0.),
++            is_overview_open,
++            is_mru_open,
++        ) {
++            return;
++        }
++
+         // Handle wheel scroll bindings.
+         if source == AxisSource::Wheel {
+             // If we have a scroll bind with current modifiers, then accumulate and don't pass to
+@@ -4168,6 +4190,11 @@ impl State {
+         let mods = modifiers_from_state(mods);
+         let mod_down = mods.contains(mod_key.to_modifiers());
+ 
++        // Matrix Leinwand (R46): Touch-Wisch wohnt in input/leinwand.rs.
++        if leinwand::wisch_start(self, slot, pos, &under, mods.is_empty()) {
++            return;
++        }
++
+         if self.niri.screenshot_ui.is_open() {
+             // If we'll be moving the existing selection, use the selection output.
+             let output = if mod_down {
+@@ -4287,6 +4314,11 @@ impl State {
+         };
+         let slot = evt.slot();
+ 
++        // Matrix Leinwand (R46): input/leinwand.rs.
++        if leinwand::wisch_ende(self, slot) {
++            return;
++        }
++
+         if let Some(capture) = self.niri.screenshot_ui.pointer_up(Some(slot)) {
+             if capture {
+                 self.confirm_screenshot(true);
+@@ -4314,6 +4346,11 @@ impl State {
+         };
+         let slot = evt.slot();
+ 
++        // Matrix Leinwand (R46): input/leinwand.rs.
++        if leinwand::wisch_schritt(self, slot, pos) {
++            return;
++        }
++
+         if let Some(output) = self.niri.screenshot_ui.selection_output().cloned() {
+             let geom = self.niri.global_space.output_geometry(&output).unwrap();
+             let point = (pos - geom.loc.to_f64())
+@@ -4353,6 +4390,7 @@ impl State {
+         handle.frame(self);
+     }
+     fn on_touch_cancel<I: InputBackend>(&mut self, _evt: I::TouchCancelEvent) {
++        self.niri.leinwand_wisch = None;
+         let Some(handle) = self.niri.seat.get_touch() else {
+             return;
+         };
+diff --git a/src/input/spatial_movement_grab.rs b/src/input/spatial_movement_grab.rs
+index 546929a0..cfd65d45 100644
+--- a/src/input/spatial_movement_grab.rs
++++ b/src/input/spatial_movement_grab.rs
+@@ -25,6 +25,9 @@ pub struct SpatialMovementGrab {
+     new_location: Point<f64, Logical>,
+     event_timestamp: Option<Duration>,
+     relative_delta: Option<Point<f64, Logical>>,
++
++    // Matrix Leinwand: Gesamtweg (Klick ohne Zug = Heimweg).
++    weg_sq: f64,
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -32,6 +35,9 @@ enum GestureState {
+     Recognizing,
+     ViewOffset,
+     WorkspaceSwitch,
++    /// Matrix Leinwand: freies 2D-Pan der Floating-Ebene (beide Achsen
++    /// gleichzeitig — kein Achsen-Einrasten).
++    Leinwand,
+ }
+ 
+ impl SpatialMovementGrab {
+@@ -57,6 +63,27 @@ impl SpatialMovementGrab {
+             new_location: location,
+             event_timestamp: None,
+             relative_delta: None,
++            weg_sq: 0.,
++        }
++    }
++
++    /// Matrix Leinwand: Grab, der die Floating-Kamera frei in 2D bewegt.
++    pub fn new_leinwand(
++        start_data: PointerGrabStartData<State>,
++        output: Output,
++        workspace_id: WorkspaceId,
++    ) -> Self {
++        let location = start_data.location;
++        Self {
++            last_location: location,
++            start_data,
++            output,
++            workspace_id,
++            gesture: GestureState::Leinwand,
++            new_location: location,
++            event_timestamp: None,
++            relative_delta: None,
++            weg_sq: 0.,
+         }
+     }
+ 
+@@ -113,6 +140,11 @@ impl SpatialMovementGrab {
+             GestureState::WorkspaceSwitch => {
+                 layout.workspace_switch_gesture_update(-delta.y, timestamp, false)
+             }
++            GestureState::Leinwand => {
++                self.weg_sq += delta.x * delta.x + delta.y * delta.y;
++                layout.leinwand_pan(delta);
++                Some(Some(self.output.clone()))
++            }
+         };
+ 
+         if let Some(output) = res {
+@@ -131,6 +163,15 @@ impl SpatialMovementGrab {
+             GestureState::Recognizing => None,
+             GestureState::ViewOffset => layout.view_offset_gesture_end(Some(false)),
+             GestureState::WorkspaceSwitch => layout.workspace_switch_gesture_end(Some(false)),
++            GestureState::Leinwand => {
++                // Klick auf den Leerraum ohne nennenswerten Zug: Heimweg.
++                if self.weg_sq < 6.0 * 6.0 {
++                    if crate::utils::matrix_schalter_an("leinwand-heimweg") {
++                    layout.leinwand_heimweg();
++                    }
++                }
++                Some(self.output.clone())
++            }
+         };
+ 
+         if let Some(output) = res {
+diff --git a/src/layout/floating.rs b/src/layout/floating.rs
+index 075787fd..1f125562 100644
+--- a/src/layout/floating.rs
++++ b/src/layout/floating.rs
+@@ -27,6 +27,10 @@ use crate::utils::{
+ };
+ use crate::window::ResolvedWindowRules;
+ 
++// Matrix Leinwand (R46): Kamera & Ordnung wohnen im Kind-Modul.
++#[path = "floating_leinwand.rs"]
++mod leinwand_teil;
++
+ /// By how many logical pixels the directional move commands move floating windows.
+ pub const DIRECTIONAL_MOVE_PX: f64 = 50.;
+ 
+@@ -67,6 +71,9 @@ pub struct FloatingSpace<W: LayoutElement> {
+ 
+     /// Configurable properties of the layout.
+     options: Rc<Options>,
++
++    /// Matrix Leinwand: die Kamera — Blickpunkt auf der unendlichen Ebene.
++    blick: Point<f64, Logical>,
+ }
+ 
+ niri_render_elements! {
+@@ -92,6 +99,9 @@ struct Data {
+ 
+     /// Working area used for conversions.
+     working_area: Rectangle<f64, Logical>,
++
++    /// Matrix Leinwand: absolute Ebenen-Koordinaten, keine Klemmung.
++    leinwand: bool,
+ }
+ 
+ impl Data {
+@@ -99,18 +109,32 @@ impl Data {
+         working_area: Rectangle<f64, Logical>,
+         tile: &Tile<W>,
+         logical_pos: Point<f64, Logical>,
++        leinwand: bool,
+     ) -> Self {
+         let mut rv = Self {
+             pos: Point::default(),
+             logical_pos: Point::default(),
+             size: Size::default(),
+             working_area,
++            leinwand,
+         };
+         rv.update(tile);
+         rv.set_logical_pos(logical_pos);
+         rv
+     }
+ 
++    /// Leinwand-Modus umschalten; beim Ausschalten klemmt die Position
++    /// zurück in die Arbeitsfläche.
++    pub fn set_leinwand(&mut self, leinwand: bool) {
++        if self.leinwand == leinwand {
++            return;
++        }
++        self.leinwand = leinwand;
++        if !leinwand {
++            self.set_logical_pos(self.logical_pos);
++        }
++    }
++
+     pub fn scale_by_working_area(
+         area: Rectangle<f64, Logical>,
+         pos: Point<f64, SizeFrac>,
+@@ -134,6 +158,11 @@ impl Data {
+     }
+ 
+     fn recompute_logical_pos(&mut self) {
++        // Matrix Leinwand: Positionen sind absolute Ebenen-Koordinaten —
++        // keine Ableitung aus der Arbeitsfläche, keine Klemmung.
++        if self.leinwand {
++            return;
++        }
+         let mut logical_pos = Self::scale_by_working_area(self.working_area, self.pos);
+ 
+         // Make sure the window doesn't go too much off-screen. Numbers taken from Mutter.
+@@ -180,6 +209,10 @@ impl Data {
+     pub fn set_logical_pos(&mut self, logical_pos: Point<f64, Logical>) {
+         self.pos = Self::logical_to_size_frac_in_working_area(self.working_area, logical_pos);
+ 
++        if self.leinwand {
++            self.logical_pos = logical_pos;
++            return;
++        }
+         // This will clamp the logical position to the current working area.
+         self.recompute_logical_pos();
+     }
+@@ -218,6 +251,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
+             scale,
+             clock,
+             options,
++            blick: Point::default(),
+         }
+     }
+ 
+@@ -228,8 +262,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
+         scale: f64,
+         options: Rc<Options>,
+     ) {
++        let leinwand = options.gestures.leinwand_drag;
+         for (tile, data) in zip(&mut self.tiles, &mut self.data) {
+             tile.update_config(view_size, scale, options.clone());
++            data.set_leinwand(leinwand);
+             data.update(tile);
+             data.update_config(working_area);
+         }
+@@ -286,14 +322,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
+     }
+ 
+     pub fn tiles_with_offsets(&self) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>)> + '_ {
+-        let offsets = self.data.iter().map(|d| d.logical_pos);
++        let blick = if self.leinwand() { self.blick } else { Point::default() };
++        let offsets = self.data.iter().map(move |d| d.logical_pos - blick);
+         zip(&self.tiles, offsets)
+     }
+ 
+     pub fn tiles_with_offsets_mut(
+         &mut self,
+     ) -> impl Iterator<Item = (&mut Tile<W>, Point<f64, Logical>)> + '_ {
+-        let offsets = self.data.iter().map(|d| d.logical_pos);
++        let blick = if self.leinwand() { self.blick } else { Point::default() };
++        let offsets = self.data.iter().map(move |d| d.logical_pos - blick);
+         zip(&mut self.tiles, offsets)
+     }
+ 
+@@ -447,14 +485,19 @@ impl<W: LayoutElement> FloatingSpace<W> {
+         }
+ 
+         let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
+-            center_preferring_top_left_in_area(self.working_area, tile.tile_size())
++            if self.leinwand() {
++                self.leinwand_spawn_pos(tile.tile_size())
++            } else {
++                center_preferring_top_left_in_area(self.working_area, tile.tile_size())
++            }
+         });
+ 
+-        let data = Data::new(self.working_area, &tile, pos);
++        let data = Data::new(self.working_area, &tile, pos, self.leinwand());
+         self.data.insert(idx, data);
+         self.tiles.insert(idx, tile);
+ 
+         self.bring_up_descendants_of(idx);
++        self.leinwand_entueberlappen(idx);
+     }
+ 
+     pub fn add_tile_above(&mut self, above: &W::Id, mut tile: Tile<W>, activate: bool) {
+@@ -1053,6 +1096,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
+             data.set_logical_pos(data.logical_pos + offset);
+         }
+ 
++        // Leinwand: Nachbarn gewöhnen sich an die neue Größe. Läuft bei
++        // JEDEM Commit (billig ohne Überlappung) — beim Spawn kennen
++        // Fenster ihre echte Größe erst nach dem ersten Commit, und erst
++        // dann lassen sich Alt-Überlappungen sicher auflösen.
++        self.leinwand_entueberlappen(tile_idx);
++        let _ = prev_size;
++
+         true
+     }
+ 
+diff --git a/src/layout/floating_leinwand.rs b/src/layout/floating_leinwand.rs
+new file mode 100644
+index 00000000..627a78da
+--- /dev/null
++++ b/src/layout/floating_leinwand.rs
+@@ -0,0 +1,255 @@
++//! Matrix Leinwand — Kamera (blick), Blättern, Heimweg, Geist-Info,
++//! Spawn-Ordnung und Ent-Überlappung der FloatingSpace (R46: aus
++//! floating.rs herausgehoben; Kind-Modul, sieht die privaten Felder).
++
++use super::*;
++
++impl<W: LayoutElement> FloatingSpace<W> {
++    /// Leinwand-Modus aktiv? (Config: gestures { leinwand-drag })
++    pub(super) fn leinwand(&self) -> bool {
++        self.options.gestures.leinwand_drag
++    }
++
++    /// Die Kamera verschieben: die Ebene folgt dem Cursor (Papier greifen).
++    pub fn leinwand_pan(&mut self, delta: Point<f64, Logical>) {
++        if self.leinwand() {
++            self.blick -= delta;
++        }
++    }
++
++    /// Heimweg: die Kamera so setzen, dass der Schwerpunkt aller Fenster
++    /// mittig in der Arbeitsfläche liegt — gegen das Verlaufen auf der
++    /// unendlichen Ebene. (Aufruf federt über tiles_with_render_positions.)
++    pub fn leinwand_heimweg(&mut self) {
++        if !self.leinwand() || self.data.is_empty() {
++            return;
++        }
++        let mut mitte = Point::from((0.0, 0.0));
++        for d in &self.data {
++            mitte += d.logical_pos + d.size.downscale(2.0).to_point();
++        }
++        let n = self.data.len() as f64;
++        mitte = Point::from((mitte.x / n, mitte.y / n));
++        let ziel = self.working_area.loc + self.working_area.size.downscale(2.0).to_point();
++        self.blick = mitte - ziel;
++    }
++
++    /// Fenster-Geist (Matrix-Original, 7.7.): Zentren aller Leinwand-
++    /// Fenster + Markierung des Fensters, das der Sichtmitte am nächsten
++    /// liegt — Grundlage der Icon-Wolke neben der Maus.
++    pub fn leinwand_geist_info(&self) -> Vec<(W::Id, Point<f64, Logical>, bool)> {
++        if !self.leinwand() || self.data.is_empty() {
++            return Vec::new();
++        }
++        let sichtmitte =
++            self.working_area.loc + self.working_area.size.downscale(2.0).to_point() + self.blick;
++        let zentren: Vec<Point<f64, Logical>> = self
++            .data
++            .iter()
++            .map(|d| d.logical_pos + d.size.downscale(2.0).to_point())
++            .collect();
++        let naechst = (0..zentren.len()).min_by(|&a, &b| {
++            let da = zentren[a] - sichtmitte;
++            let db = zentren[b] - sichtmitte;
++            (da.x * da.x + da.y * da.y).total_cmp(&(db.x * db.x + db.y * db.y))
++        });
++        self.tiles
++            .iter()
++            .zip(zentren)
++            .enumerate()
++            .map(|(i, (tile, z))| (tile.window().id().clone(), z, Some(i) == naechst))
++            .collect()
++    }
++
++    /// Leinwand-Blättern (Nutzer-Idee 7.7.): das Mausrad auf dem Leerraum
++    /// wandert durch die Fenster — räumlich sortiert (links→rechts,
++    /// Gleichstand oben→unten). Die Kamera zentriert das gewählte Fenster
++    /// (damit ist es voll sichtbar), die Fahrt federt wie ein Magic-Move.
++    /// Gibt das Fenster zurück, das den Fokus bekommen soll.
++    pub fn leinwand_blaettern(&mut self, richtung: i32) -> Option<W::Id> {
++        if !self.leinwand() || self.data.is_empty() {
++            return None;
++        }
++        let zentren: Vec<Point<f64, Logical>> = self
++            .data
++            .iter()
++            .map(|d| d.logical_pos + d.size.downscale(2.0).to_point())
++            .collect();
++        let mut reihenfolge: Vec<usize> = (0..zentren.len()).collect();
++        reihenfolge.sort_by(|&a, &b| {
++            zentren[a]
++                .x
++                .total_cmp(&zentren[b].x)
++                .then(zentren[a].y.total_cmp(&zentren[b].y))
++        });
++        // „Aktuell" = das Fenster, dessen Zentrum der Sichtmitte am
++        // nächsten liegt — das, was der Blick gerade für vorn hält.
++        let sichtmitte =
++            self.working_area.loc + self.working_area.size.downscale(2.0).to_point() + self.blick;
++        let naechstes = (0..zentren.len()).min_by(|&a, &b| {
++            let da = zentren[a] - sichtmitte;
++            let db = zentren[b] - sichtmitte;
++            (da.x * da.x + da.y * da.y).total_cmp(&(db.x * db.x + db.y * db.y))
++        })?;
++        let pos = reihenfolge.iter().position(|&i| i == naechstes)? as i64;
++        let n = reihenfolge.len() as i64;
++        let ziel = reihenfolge[(pos + richtung as i64).rem_euclid(n) as usize];
++
++        // Kamera aufs Ziel zentrieren — voll sichtbar, solange das Fenster
++        // auf den Schirm passt; die Tiles federn von der alten Sicht herüber.
++        let alt = self.blick;
++        self.blick = zentren[ziel]
++            - (self.working_area.loc + self.working_area.size.downscale(2.0).to_point());
++        let diff = self.blick - alt;
++        if diff.x * diff.x + diff.y * diff.y > 4.0 {
++            for tile in &mut self.tiles {
++                tile.animate_move_from(diff);
++            }
++        }
++        Some(self.tiles[ziel].window().id().clone())
++    }
++
++    /// Fenster-Klick auf der Leinwand (Nutzer-Idee 7.7.): ein NICHT voll
++    /// sichtbares Fenster fährt beim Anklicken ganz in die Sicht — wie
++    /// beim Rad-Blättern. Voll sichtbare Fenster bleiben ruhig, damit
++    /// Arbeitsklicks (Knöpfe, Text) die Kamera nie verreißen.
++    /// Gibt true zurück, wenn die Kamera gefahren ist.
++    pub fn leinwand_fenster_zeigen(&mut self, id: &W::Id) -> bool {
++        if !self.leinwand() {
++            return false;
++        }
++        let Some(i) = self.tiles.iter().position(|t| t.window().id() == id) else {
++            return false;
++        };
++        let fenster = Rectangle::new(self.data[i].logical_pos, self.data[i].size);
++        let sicht = Rectangle::new(self.working_area.loc + self.blick, self.working_area.size);
++        // Toleranz: 2px Rundungsluft zählt noch als „voll sichtbar".
++        let luft = 2.0;
++        let drin = fenster.loc.x >= sicht.loc.x - luft
++            && fenster.loc.y >= sicht.loc.y - luft
++            && fenster.loc.x + fenster.size.w <= sicht.loc.x + sicht.size.w + luft
++            && fenster.loc.y + fenster.size.h <= sicht.loc.y + sicht.size.h + luft;
++        if drin {
++            return false;
++        }
++        let alt = self.blick;
++        let zentrum = fenster.loc + fenster.size.downscale(2.0).to_point();
++        self.blick =
++            zentrum - (self.working_area.loc + self.working_area.size.downscale(2.0).to_point());
++        let diff = self.blick - alt;
++        if diff.x * diff.x + diff.y * diff.y > 4.0 {
++            for tile in &mut self.tiles {
++                tile.animate_move_from(diff);
++            }
++        }
++        true
++    }
++
++    /// Leinwand-Spawn: freie Stelle nahe der aktuellen Sicht — Fenster
++    /// öffnen NEBENEINANDER, nie überlappend (Ring-Suche um die Mitte).
++    pub(super) fn leinwand_spawn_pos(&self, size: Size<f64, Logical>) -> Point<f64, Logical> {
++        let basis = center_preferring_top_left_in_area(self.working_area, size) + self.blick;
++        let frei = |p: Point<f64, Logical>| {
++            let kandidat = Rectangle::new(p, size);
++            !self
++                .data
++                .iter()
++                .any(|d| kandidat.overlaps(Rectangle::new(d.logical_pos, d.size)))
++        };
++        if frei(basis) {
++            return basis;
++        }
++        let schritt = 64.0;
++        for ring in 1..=16 {
++            let r = ring as f64 * schritt;
++            for (dx, dy) in [
++                (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r),
++                (r, r), (-r, r), (r, -r), (-r, -r),
++            ] {
++                let p = basis + Point::from((dx, dy));
++                if frei(p) {
++                    return p;
++                }
++            }
++        }
++        basis
++    }
++
++    /// Leinwand-Regel: Fenster überlappen NIE. Der Verursacher (,
++    /// z. B. das vergrößerte oder fallengelassene Fenster) bleibt stehen —
++    /// überlappte Nachbarn weichen entlang der kleinsten Trennachse aus,
++    /// kaskadierend, bis Ruhe herrscht (Nutzer-Feedback 7.7.: „Fenster
++    /// gewöhnen sich nicht an die neue Größe").
++    pub(super) fn leinwand_entueberlappen(&mut self, fest: usize) {
++        if !self.leinwand() || self.data.len() < 2 {
++            return;
++        }
++        const LUFT: f64 = 16.0;
++        for _ in 0..64 {
++            let mut bewegt = false;
++            for i in 0..self.data.len() {
++                for j in 0..self.data.len() {
++                    if i == j || j == fest {
++                        continue;
++                    }
++                    // Bei Nicht-Verursacher-Paaren nur eine Richtung prüfen,
++                    // sonst schieben sich i und j gegenseitig endlos.
++                    if i != fest && i > j {
++                        continue;
++                    }
++                    let a = Rectangle::new(self.data[i].logical_pos, self.data[i].size);
++                    let b = Rectangle::new(self.data[j].logical_pos, self.data[j].size);
++                    if !a.overlaps(b) {
++                        continue;
++                    }
++                    // R57 (Nutzer-Fund): Liegt ein Fenster VOLLSTAENDIG im
++                    // anderen, ist das GEWOLLT (Matrix Webs Andock-Kopplung
++                    // legt den WebKit-Traeger deckungsgleich unter die
++                    // Chrome). Solche Paare laesst die Ent-Ueberlappung in
++                    // Ruhe — sonst kaempfen Kopplung und Ordnung endlos
++                    // (das war das Glitchen des weissen Fensters).
++                    let umschliesst = |aussen: Rectangle<f64, Logical>,
++                                       innen: Rectangle<f64, Logical>| {
++                        let luft = 4.0;
++                        innen.loc.x >= aussen.loc.x - luft
++                            && innen.loc.y >= aussen.loc.y - luft
++                            && innen.loc.x + innen.size.w
++                                <= aussen.loc.x + aussen.size.w + luft
++                            && innen.loc.y + innen.size.h
++                                <= aussen.loc.y + aussen.size.h + luft
++                    };
++                    if umschliesst(a, b) || umschliesst(b, a) {
++                        continue;
++                    }
++                    // Kleinste Trennachse: j weicht vor i aus.
++                    let nach_rechts = a.loc.x + a.size.w - b.loc.x + LUFT;
++                    let nach_links = b.loc.x + b.size.w - a.loc.x + LUFT;
++                    let nach_unten = a.loc.y + a.size.h - b.loc.y + LUFT;
++                    let nach_oben = b.loc.y + b.size.h - a.loc.y + LUFT;
++                    let min = nach_rechts.min(nach_links).min(nach_unten).min(nach_oben);
++                    let offset = if min == nach_rechts {
++                        Point::from((nach_rechts, 0.0))
++                    } else if min == nach_links {
++                        Point::from((-nach_links, 0.0))
++                    } else if min == nach_unten {
++                        Point::from((0.0, nach_unten))
++                    } else {
++                        Point::from((0.0, -nach_oben))
++                    };
++                    let vorher = self.data[j].logical_pos;
++                    let neu = vorher + offset;
++                    self.data[j].set_logical_pos(neu);
++                    // Federndes Ausweichen (Magic-Move) statt Springen.
++                    let diff = vorher - self.data[j].logical_pos;
++                    if diff.x * diff.x + diff.y * diff.y > 4.0 {
++                        self.tiles[j].animate_move_from(diff);
++                    }
++                    bewegt = true;
++                }
++            }
++            if !bewegt {
++                break;
++            }
++        }
++    }
++}
+diff --git a/src/layout/mod.rs b/src/layout/mod.rs
+index 5c4dd639..82bcf4c9 100644
+--- a/src/layout/mod.rs
++++ b/src/layout/mod.rs
+@@ -1610,6 +1610,34 @@ impl<W: LayoutElement> Layout<W> {
+         Some(&mon.workspaces[mon.active_workspace_idx])
+     }
+ 
++    /// Matrix Leinwand: Kamera der aktiven Floating-Ebene verschieben.
++    pub fn leinwand_pan(&mut self, delta: Point<f64, Logical>) {
++        if let Some(ws) = self.active_workspace_mut() {
++            ws.leinwand_pan(delta);
++        }
++    }
++
++    /// Matrix Leinwand: Kamera heim zum Fenster-Schwerpunkt.
++    pub fn leinwand_heimweg(&mut self) {
++        if let Some(ws) = self.active_workspace_mut() {
++            ws.leinwand_heimweg();
++        }
++    }
++
++    /// Matrix Leinwand: per Mausrad zum nächsten/vorherigen Fenster —
++    /// gibt das zu fokussierende Fenster zurück.
++    pub fn leinwand_blaettern(&mut self, richtung: i32) -> Option<W::Id> {
++        let ws = self.active_workspace_mut()?;
++        ws.leinwand_blaettern(richtung)
++    }
++
++    /// Matrix Leinwand: angeklicktes Fenster ganz in die Sicht fahren
++    /// (nur wenn es nicht schon voll sichtbar ist).
++    pub fn leinwand_fenster_zeigen(&mut self, id: &W::Id) -> bool {
++        self.active_workspace_mut()
++            .is_some_and(|ws| ws.leinwand_fenster_zeigen(id))
++    }
++
+     pub fn active_workspace_mut(&mut self) -> Option<&mut Workspace<W>> {
+         let MonitorSet::Normal {
+             monitors,
+diff --git a/src/layout/scrolling.rs b/src/layout/scrolling.rs
+index 9739abdf..3ef507b0 100644
+--- a/src/layout/scrolling.rs
++++ b/src/layout/scrolling.rs
+@@ -554,7 +554,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+         }
+ 
+         let (area, padding) = if mode.is_maximized() {
+-            (self.parent_area, 0.)
++            (self.maximized_area(), 0.)
+         } else {
+             (self.working_area, self.options.layout.gaps)
+         };
+@@ -580,7 +580,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+         }
+ 
+         let area = if mode.is_maximized() {
+-            self.parent_area
++            self.maximized_area()
+         } else {
+             self.working_area
+         };
+@@ -3212,7 +3212,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+                 let mode = col.sizing_mode();
+ 
+                 let area = if mode.is_maximized() {
+-                    self.parent_area
++                    self.maximized_area()
+                 } else {
+                     self.working_area
+                 };
+@@ -3245,7 +3245,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+                     let mode = col.sizing_mode();
+ 
+                     let area = if mode.is_maximized() {
+-                        self.parent_area
++                        self.maximized_area()
+                     } else {
+                         self.working_area
+                     };
+@@ -3399,7 +3399,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+                     let mode = col.sizing_mode();
+ 
+                     let area = if mode.is_maximized() {
+-                        self.parent_area
++                        self.maximized_area()
+                     } else {
+                         self.working_area
+                     };
+@@ -3433,7 +3433,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+                     let mode = col.sizing_mode();
+ 
+                     let area = if mode.is_maximized() {
+-                        self.parent_area
++                        self.maximized_area()
+                     } else {
+                         self.working_area
+                     };
+@@ -3723,6 +3723,20 @@ impl<W: LayoutElement> ScrollingSpace<W> {
+         self.parent_area
+     }
+ 
++    /// Leinwand: Die Fläche für maximierte Fenster — die Arbeitsfläche
++    /// minus die eine Luft (gaps), damit Maximiert denselben Randabstand
++    /// hält wie Bar, Dock und volle Spalten.
++    fn maximized_area(&self) -> Rectangle<f64, Logical> {
++        let gaps = self.options.layout.gaps;
++        let mut area = self.parent_area;
++        area.loc.x += gaps;
++        area.loc.y += gaps;
++        area.size.w = f64::max(1., area.size.w - gaps * 2.);
++        area.size.h = f64::max(1., area.size.h - gaps * 2.);
++        area
++    }
++
++
+     #[cfg(test)]
+     pub fn clock(&self) -> &Clock {
+         &self.clock
+@@ -4418,6 +4432,7 @@ impl<W: LayoutElement> Column<W> {
+     fn update_tile_sizes_with_transaction(&mut self, animate: bool, transaction: Transaction) {
+         let sizing_mode = self.pending_sizing_mode();
+         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
++            let max_size = self.maximized_area().size;
+             for (tile_idx, tile) in self.tiles.iter_mut().enumerate() {
+                 // In tabbed mode, only the visible window participates in the transaction.
+                 let is_active = tile_idx == self.active_tile_idx;
+@@ -4430,7 +4445,7 @@ impl<W: LayoutElement> Column<W> {
+                 if matches!(sizing_mode, SizingMode::Fullscreen) {
+                     tile.request_fullscreen(animate, transaction);
+                 } else {
+-                    tile.request_maximized(self.parent_area.size, animate, transaction);
++                    tile.request_maximized(max_size, animate, transaction);
+                 }
+             }
+             return;
+@@ -5166,13 +5181,26 @@ impl<W: LayoutElement> Column<W> {
+         self.update_tile_sizes(true);
+     }
+ 
++    /// Leinwand: Die Fläche für maximierte Fenster — die Arbeitsfläche
++    /// minus die eine Luft (gaps), damit Maximiert denselben Randabstand
++    /// hält wie Bar, Dock und volle Spalten.
++    fn maximized_area(&self) -> Rectangle<f64, Logical> {
++        let gaps = self.options.layout.gaps;
++        let mut area = self.parent_area;
++        area.loc.x += gaps;
++        area.loc.y += gaps;
++        area.size.w = f64::max(1., area.size.w - gaps * 2.);
++        area.size.h = f64::max(1., area.size.h - gaps * 2.);
++        area
++    }
++
+     fn tiles_origin(&self) -> Point<f64, Logical> {
+         let mut origin = Point::from((0., 0.));
+ 
+         match self.sizing_mode() {
+             SizingMode::Normal => (),
+             SizingMode::Maximized => {
+-                origin.y += self.parent_area.loc.y;
++                origin.y += self.maximized_area().loc.y;
+                 return origin;
+             }
+             SizingMode::Fullscreen => return origin,
+diff --git a/src/layout/workspace.rs b/src/layout/workspace.rs
+index 74487797..5ed1d969 100644
+--- a/src/layout/workspace.rs
++++ b/src/layout/workspace.rs
+@@ -206,6 +206,31 @@ impl FloatingActive {
+ }
+ 
+ impl<W: LayoutElement> Workspace<W> {
++    /// Matrix Leinwand: Kamera der Floating-Ebene verschieben.
++    pub fn leinwand_pan(&mut self, delta: Point<f64, Logical>) {
++        self.floating.leinwand_pan(delta);
++    }
++
++    /// Matrix Leinwand: Kamera heim zum Fenster-Schwerpunkt.
++    pub fn leinwand_heimweg(&mut self) {
++        self.floating.leinwand_heimweg();
++    }
++
++    /// Matrix Leinwand: per Mausrad zum nächsten/vorherigen Fenster.
++    pub fn leinwand_blaettern(&mut self, richtung: i32) -> Option<W::Id> {
++        self.floating.leinwand_blaettern(richtung)
++    }
++
++    /// Fenster-Geist: Fenster-Zentren für die Icon-Wolke neben der Maus.
++    pub fn leinwand_geist_info(&self) -> Vec<(W::Id, Point<f64, Logical>, bool)> {
++        self.floating.leinwand_geist_info()
++    }
++
++    /// Matrix Leinwand: angeklicktes Fenster ganz in die Sicht fahren.
++    pub fn leinwand_fenster_zeigen(&mut self, id: &W::Id) -> bool {
++        self.floating.leinwand_fenster_zeigen(id)
++    }
++
+     pub fn new(output: Output, clock: Clock, options: Rc<Options>) -> Self {
+         Self::new_with_config(output, None, clock, options)
+     }
+diff --git a/src/leinwand.rs b/src/leinwand.rs
+new file mode 100644
+index 00000000..163fffa8
+--- /dev/null
++++ b/src/leinwand.rs
+@@ -0,0 +1,139 @@
++//! Matrix Leinwand — das Modul-Zuhause der Fork-Identität (R46).
++//!
++//! Entkopplungs-Schritt 2 (Patch→Module): Alles, was die Leinwand dem
++//! Upstream hinzufügt, wohnt in eigenen Dateien — hier die Leerraum-
++//! Regel und der Fenster-Geist-Render-Hook; die Eingabe-Gesten liegen
++//! in input/leinwand.rs, die Kamera-Methoden in layout/
++//! floating_leinwand.rs. Upstream-Dateien behalten nur Einhak-Zeilen.
++
++use smithay::backend::renderer::element::Kind;
++use smithay::output::Output;
++use smithay::utils::{Logical, Point};
++
++use crate::niri::{Niri, PointContents};
++use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
++use crate::render_helpers::renderer::NiriRenderer;
++use crate::render_helpers::texture::TextureRenderElement;
++
++/// Die Leerraum-Regel der Leinwand: kein Fenster, keine heiße Ecke,
++/// höchstens Background/Bottom-Layer unterm Zeiger — dort gehören
++/// Gesten der Leinwand, nicht den Apps.
++pub fn leerraum(under: &PointContents) -> bool {
++    under.window.is_none()
++        && !under.hot_corner
++        && under.layer.as_ref().map_or(true, |l| {
++            matches!(
++                l.layer(),
++                smithay::wayland::shell::wlr_layer::Layer::Background
++                    | smithay::wayland::shell::wlr_layer::Layer::Bottom
++            )
++        })
++}
++
++impl Niri {
++    /// Fenster-Geist der Leinwand: liegt die Maus auf dem Leerraum,
++    /// federt neben ihr die Icon-Wolke der offenen Apps ein. Liefert
++    /// das fertige Render-Element; None = nichts zu zeigen.
++    pub fn leinwand_geist_element<R: NiriRenderer>(
++        &self,
++        output: &Output,
++        renderer: &mut R,
++    ) -> Option<PrimaryGpuTextureRenderElement> {
++    // Matrix Leinwand: der Fenster-Geist — liegt die Maus auf dem
++    // Leerraum, federt neben ihr die Icon-Wolke der offenen Apps ein
++    // (räumlich wie auf der Leinwand; Sichtmitte = größeres Icon).
++        if !self.config.borrow().gestures.leinwand_drag {
++            return None;
++        }
++        let pointer = self.seat.get_pointer()?;
++        let ort = pointer.current_location();
++        let out_geo = self.global_space.output_geometry(output)?;
++        // Der Geist lebt nur auf dem Output unter dem Zeiger — nur
++        // dort darf auch das Sichtbarkeits-Ziel verstellt werden.
++        if !out_geo.to_f64().contains(ort) {
++            return None;
++        }
++
++        let mut fenster: Vec<(String, Point<f64, Logical>, bool)> = Vec::new();
++        let mut soll = self.pointer_visibility.is_visible()
++            && !self.layout.is_overview_open();
++        if soll {
++            let under = self.contents_under(ort);
++            soll = under.window.is_none()
++                && !under.hot_corner
++                && under.layer.as_ref().map_or(true, |l| {
++                    matches!(
++                        l.layer(),
++                        smithay::wayland::shell::wlr_layer::Layer::Background
++                            | smithay::wayland::shell::wlr_layer::Layer::Bottom
++                    )
++                });
++        }
++        if soll {
++            if let Some(mon) = self.layout.monitor_for_output(output) {
++                let info = mon.active_workspace_ref().leinwand_geist_info();
++                fenster = info
++                    .iter()
++                    .map(|(win, z, aktiv)| {
++                        let app_id = win
++                            .toplevel()
++                            .and_then(|t| {
++                                crate::utils::with_toplevel_role(t, |role| {
++                                    role.app_id.clone()
++                                })
++                            })
++                            .unwrap_or_default();
++                        (app_id, *z, *aktiv)
++                    })
++                    .collect();
++            }
++            soll = !fenster.is_empty();
++        }
++
++        // Geist-Modus (Nutzer 7.7.): standardmaessig nur nach dem
++        // Rad-Blaettern sichtbar — dann verweht er wieder.
++        let soll = self.fenster_geist.soll_zeigen(soll) && soll;
++        self.fenster_geist.setze_ziel(soll);
++        let alpha = self.fenster_geist.alpha();
++        if alpha <= 0.004 {
++            return None;
++        }
++
++        let scale = output.current_scale().fractional_scale();
++        let (buffer, position) = if soll {
++            let buffer = self.fenster_geist.render(renderer, scale, &fenster)?;
++            // Neben dem Zeiger, in den Schirm geklemmt (Scrollgeist-
++            // Grammatik: rechts, am Rand nach links flippend).
++            let groesse = buffer.logical_size();
++            let lokal = ort - out_geo.loc.to_f64();
++            let out_size = out_geo.size.to_f64();
++            let mut x = lokal.x + 26.0;
++            let mut y = lokal.y + 26.0;
++            if x + groesse.w > out_size.w - 8.0 {
++                x = lokal.x - groesse.w - 26.0;
++            }
++            if y + groesse.h > out_size.h - 8.0 {
++                y = (out_size.h - groesse.h - 8.0).max(8.0);
++            }
++            self.fenster_geist.merke_ort(x, y);
++            (buffer, (x, y))
++        } else {
++            // Ausblenden: die letzte Wolke verweht an Ort und Stelle.
++            let buffer = self.fenster_geist.letzte_textur()?;
++            (buffer, self.fenster_geist.letzter_ort())
++        };
++
++        let location = Point::from(position)
++            .to_physical_precise_round(scale)
++            .to_logical(scale);
++        let elem = TextureRenderElement::from_texture_buffer(
++            buffer,
++            location,
++            alpha as f32,
++            None,
++            None,
++            Kind::Unspecified,
++        );
++        Some(PrimaryGpuTextureRenderElement(elem))
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index d5168386..f4707266 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -15,6 +15,7 @@ pub mod input;
+ pub mod ipc;
+ pub mod layer;
+ pub mod layout;
++pub mod leinwand;
+ pub mod niri;
+ pub mod protocols;
+ pub mod render_helpers;
+diff --git a/src/niri.rs b/src/niri.rs
+index 3d60544a..ce3f62e3 100644
+--- a/src/niri.rs
++++ b/src/niri.rs
+@@ -168,6 +168,7 @@ use crate::render_helpers::{
+ use crate::screencasting::Screencasting;
+ use crate::ui::config_error_notification::ConfigErrorNotification;
+ use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
++use crate::ui::fenster_geist::FensterGeist;
+ use crate::ui::hotkey_overlay::HotkeyOverlay;
+ use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
+ use crate::ui::screen_transition::{self, ScreenTransition};
+@@ -390,6 +391,18 @@ pub struct Niri {
+     pub config_error_notification: ConfigErrorNotification,
+     pub hotkey_overlay: HotkeyOverlay,
+     pub exit_confirm_dialog: ExitConfirmDialog,
++    /// Fenster-Geist der Leinwand: Icon-Wolke der offenen Apps bei der Maus.
++    pub fenster_geist: FensterGeist,
++    /// Leinwand-Blättern per Trackpad: gesammelte Scroll-Pixel
++    /// (alle 60 px ein Schritt; das Rad nutzt den v120-Tracker).
++    pub leinwand_finger_roll: f64,
++    /// Klebe-Blättern: Zeit und Zeigerort des letzten Leinwand-Blätterns.
++    /// Rutscht beim Kamera-Zentrieren ein Fenster unter die STEHENDE Maus,
++    /// gehört das Rad noch 1 s der Leinwand (Nutzer-Flow-Fund, 13.7.).
++    pub leinwand_blaettern_zuletzt: Option<(std::time::Instant, Point<f64, Logical>)>,
++    /// Touch-Wisch auf leerer Leinwand: (Slot, letztes Y, Pixel-Sammler).
++    /// Ein-Finger-Pendant zum Mausrad-Blättern (Nutzer, 13.7.).
++    pub leinwand_wisch: Option<(smithay::backend::input::TouchSlot, f64, f64)>,
+ 
+     pub window_mru_ui: WindowMruUi,
+     pub pending_mru_commit: Option<PendingMruCommit>,
+@@ -2423,6 +2436,7 @@ impl Niri {
+         let config_error_notification =
+             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
+ 
++        let fenster_geist = FensterGeist::new(animation_clock.clone(), config.clone());
+         let mut hotkey_overlay = HotkeyOverlay::new(config.clone(), mod_key);
+         if !config_.hotkey_overlay.skip_at_startup {
+             hotkey_overlay.show();
+@@ -2611,6 +2625,10 @@ impl Niri {
+             screenshot_ui,
+             config_error_notification,
+             hotkey_overlay,
++            fenster_geist,
++            leinwand_finger_roll: 0.0,
++            leinwand_blaettern_zuletzt: None,
++            leinwand_wisch: None,
+             exit_confirm_dialog,
+ 
+             window_mru_ui,
+@@ -4067,6 +4085,7 @@ impl Niri {
+ 
+         self.layout.advance_animations();
+         self.config_error_notification.advance_animations();
++        self.fenster_geist.advance_animations();
+         self.exit_confirm_dialog.advance_animations();
+         self.screenshot_ui.advance_animations();
+         self.window_mru_ui.advance_animations();
+@@ -4299,6 +4318,12 @@ impl Niri {
+         self.window_mru_ui
+             .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
+ 
++        // Matrix Leinwand (R46): der Fenster-Geist wohnt in
++        // crate::leinwand — hier nur der Einhak-Punkt.
++        if let Some(elem) = self.leinwand_geist_element(output, ctx.renderer) {
++            push(elem.into());
++        }
++
+         // Don't draw the focus ring on the workspaces while interactively moving above those
+         // workspaces, since the interactively-moved window already has a focus ring.
+         let focus_ring = !self.layout.interactive_move_is_moving_above_output(output);
+@@ -4612,6 +4637,7 @@ impl Niri {
+             state.unfinished_animations_remain |=
+                 self.config_error_notification.are_animations_ongoing();
+             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();
++            state.unfinished_animations_remain |= self.fenster_geist.are_animations_ongoing();
+             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
+             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
+             state.unfinished_animations_remain |= state.screen_transition.is_some();
+diff --git a/src/ui/fenster_geist.rs b/src/ui/fenster_geist.rs
+new file mode 100644
+index 00000000..ae2c83a1
+--- /dev/null
++++ b/src/ui/fenster_geist.rs
+@@ -0,0 +1,599 @@
++//! Der Fenster-Geist (Matrix-Original, 7.7.2026).
++//!
++//! Auf der unendlichen Leinwand gibt es keinen Überblick über die offenen
++//! Fenster — der Fenster-Geist zeigt ihn: Liegt die Maus auf dem Leerraum,
++//! blendet neben ihr eine kleine Icon-Wolke aller offenen Apps ein,
++//! räumlich angeordnet wie die Fenster auf der Leinwand (eine
++//! Miniatur-Karte aus App-Icons). Das Fenster der Sichtmitte ist schlicht
++//! GRÖSSER als die anderen und trägt eine formgleiche Squircle-Kante.
++//! Verwandt mit dem Scrollgeist der MatrixKit-Apps: Orientierung
++//! erscheint bei der Maus, nicht am Rand — und federt ein und aus.
++//!
++//! GEISTKIT-REGEL: Die Geister gehören zu MatrixKit und halten dessen
++//! Gesetze ein — Farben kommen aus der lebenden DMS-Palette (hell wie
++//! dunkel), die Radien sind konzentrisch, die Schrift ist Inter, und
++//! „Bewegung reduzieren" (~/.config/matrix/bewegung) schaltet die
++//! Feder ab. Nichts ist hartkodiert, was das System lebendig macht.
++
++use std::cell::{Cell, RefCell};
++use std::collections::HashMap;
++use std::hash::{Hash, Hasher};
++use std::path::PathBuf;
++use std::rc::Rc;
++
++use niri_config::Config;
++use pangocairo::cairo::{self, Format, ImageSurface};
++use pangocairo::pango::{self, FontDescription};
++use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
++use smithay::utils::{Logical, Point, Transform};
++
++use crate::animation::{Animation, Clock};
++use crate::render_helpers::renderer::NiriRenderer;
++use crate::render_helpers::texture::TextureBuffer;
++
++/// Logische Größe eines Icons in der Wolke.
++const ICON: f64 = 24.0;
++/// Das Fenster der Sichtmitte: einfach größer statt beringt.
++const AKTIV: f64 = 34.0;
++/// Maximale Ausdehnung des Zentren-Clusters (ohne Polster).
++/// Fenster-Geist 3.0 (Nutzer-Entwurf): keine Karten-Projektion mehr —
++/// eine ruhige LISTE, höchstens drei Icons untereinander, das aktive in
++/// der Mitte. Beim Blättern rückt die Reihe mit Umlauf durch.
++const LISTE_MAX: usize = 3;
++const LISTE_TAKT: f64 = AKTIV + 10.0;
++const POLSTER: f64 = 12.0;
++/// Mindestabstand zweier Icon-Zentren (Entzerrung naher Fenster).
++
++/// Squircle-Radius der Icon-Kacheln — dieselbe Kurve wie die
++/// MatrixKit-App-Icons (~28 % der Kantenlänge).
++fn ecke(gr: f64) -> f64 {
++    gr * 0.28
++}
++
++/// Die lebende MatrixKit-Palette, soweit der Geist sie braucht
++/// (GeistKit-Regel: keine hartkodierten Farben).
++struct GeistPalette {
++    panel: (f64, f64, f64),
++    kante: (f64, f64, f64),
++    aktiv: (f64, f64, f64),
++    kachel: (f64, f64, f64),
++    kachel_text: (f64, f64, f64),
++}
++
++impl Default for GeistPalette {
++    /// Fallback = die Matrix-Standardwerte (dunkel) — nur wenn die
++    /// DMS-Palette (noch) nicht existiert.
++    fn default() -> Self {
++        Self {
++            panel: hex_rgb("#2b2b22").unwrap(),
++            kante: hex_rgb("#e4e3d7").unwrap(),
++            aktiv: hex_rgb("#bece7f").unwrap(),
++            kachel: hex_rgb("#3f4c0a").unwrap(),
++            kachel_text: hex_rgb("#daeb99").unwrap(),
++        }
++    }
++}
++
++fn hex_rgb(hex: &str) -> Option<(f64, f64, f64)> {
++    let h = hex.trim().trim_start_matches('#');
++    if h.len() < 6 {
++        return None;
++    }
++    let teil = |a: usize| u8::from_str_radix(&h[a..a + 2], 16).ok();
++    Some((
++        f64::from(teil(0)?) / 255.0,
++        f64::from(teil(2)?) / 255.0,
++        f64::from(teil(4)?) / 255.0,
++    ))
++}
++
++fn dms_colors_pfad() -> Option<PathBuf> {
++    let home = std::env::var("HOME").ok()?;
++    Some(PathBuf::from(home).join(".cache/DankMaterialShell/dms-colors.json"))
++}
++
++/// Palette aus der DMS-Farbdatei lesen — Rollen wie mk::Palette::load()
++/// im matrixkit-theme, Hell-/Dunkel-Wahl aus der DMS-Session.
++fn palette_laden() -> GeistPalette {
++    let d = GeistPalette::default();
++    let Some(pfad) = dms_colors_pfad() else { return d };
++    let Ok(raw) = std::fs::read_to_string(pfad) else { return d };
++    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else { return d };
++    let hell = std::env::var("HOME")
++        .ok()
++        .and_then(|h| {
++            std::fs::read_to_string(format!("{h}/.local/state/DankMaterialShell/session.json"))
++                .ok()
++        })
++        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
++        .and_then(|v| v.get("isLightMode").and_then(|b| b.as_bool()))
++        .unwrap_or(false);
++    let modus = &json["colors"][if hell { "light" } else { "dark" }];
++    let rolle = |name: &str, fallback: (f64, f64, f64)| {
++        modus
++            .get(name)
++            .and_then(|v| v.as_str())
++            .and_then(hex_rgb)
++            .unwrap_or(fallback)
++    };
++    GeistPalette {
++        panel: rolle("surface_container_high", d.panel),
++        kante: rolle("on_surface", d.kante),
++        aktiv: rolle("primary", d.aktiv),
++        kachel: rolle("primary_container", d.kachel),
++        kachel_text: rolle("on_primary_container", d.kachel_text),
++    }
++}
++
++/// MatrixKit-Barrierefreiheit: Bewegung reduzieren gilt auch für Geister.
++fn bewegung_reduziert() -> bool {
++    std::env::var("HOME")
++        .ok()
++        .and_then(|h| std::fs::read_to_string(format!("{h}/.config/matrix/bewegung")).ok())
++        .map(|s| s.trim() == "reduziert")
++        .unwrap_or(false)
++}
++
++/// Änderungsstempel der Farbdatei — wandert in den Textur-Hash, damit
++/// ein Wallpaper-/Moduswechsel die Wolke sofort neu einfärbt.
++fn palette_stempel() -> u64 {
++    dms_colors_pfad()
++        .and_then(|p| std::fs::metadata(p).ok())
++        .and_then(|m| m.modified().ok())
++        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
++        .map(|d| d.as_secs())
++        .unwrap_or(0)
++}
++
++/// Ein- und Ausblenden wie der Scrollgeist: weiche Feder, kein Springen.
++enum Lage {
++    Versteckt,
++    Erscheint(Animation),
++    Da,
++    Verschwindet(Animation),
++}
++
++/// Wann zeigt sich der Geist? (~/.config/matrix/leinwand-geist)
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum GeistModus {
++    /// Nur nach dem Rad-Blättern — erscheint, hilft, verweht (Default).
++    Scrollen,
++    /// Immer, solange die Maus auf dem Leerraum liegt.
++    Immer,
++    Aus,
++}
++
++pub struct FensterGeist {
++    clock: Clock,
++    config: Rc<RefCell<Config>>,
++    lage: RefCell<Lage>,
++    /// app_id → dekodiertes Icon (None = Fallback-Kachel merken).
++    icons: RefCell<HashMap<String, Option<ImageSurface>>>,
++    /// Zuletzt gerenderte Wolke: (Layout-Hash, Textur).
++    buffer: RefCell<Option<(u64, TextureBuffer<GlesTexture>)>>,
++    /// Letzter Anzeigeort (Ausblenden geschieht an Ort und Stelle).
++    letzter_ort: Cell<(f64, f64)>,
++    /// Letztes Rad-Blättern — im Scrollen-Modus lebt der Geist 1,6 s.
++    zuletzt_aktiv: Cell<Option<std::time::Instant>>,
++    /// Modus-Cache (Datei alle 2 s frisch gelesen).
++    modus_cache: Cell<Option<(std::time::Instant, GeistModus)>>,
++}
++
++impl FensterGeist {
++    pub fn new(clock: Clock, config: Rc<RefCell<Config>>) -> Self {
++        Self {
++            clock,
++            config,
++            lage: RefCell::new(Lage::Versteckt),
++            icons: RefCell::new(HashMap::new()),
++            buffer: RefCell::new(None),
++            letzter_ort: Cell::new((0.0, 0.0)),
++            zuletzt_aktiv: Cell::new(None),
++            modus_cache: Cell::new(None),
++        }
++    }
++
++    /// Rad-Blättern meldet sich — der Geist zeigt sich (Scrollen-Modus).
++    pub fn aktivieren(&self) {
++        self.zuletzt_aktiv.set(Some(std::time::Instant::now()));
++    }
++
++    fn modus(&self) -> GeistModus {
++        if let Some((wann, m)) = self.modus_cache.get() {
++            if wann.elapsed().as_secs() < 2 {
++                return m;
++            }
++        }
++        let m = match crate::utils::matrix_einstellung("leinwand-geist").as_deref() {
++            Some("immer") => GeistModus::Immer,
++            Some("aus") => GeistModus::Aus,
++            _ => GeistModus::Scrollen,
++        };
++        self.modus_cache.set(Some((std::time::Instant::now(), m)));
++        m
++    }
++
++    /// Soll der Geist sichtbar sein? (leerraum = Maus auf freier Leinwand)
++    pub fn soll_zeigen(&self, leerraum: bool) -> bool {
++        match self.modus() {
++            GeistModus::Aus => false,
++            GeistModus::Immer => leerraum,
++            GeistModus::Scrollen => {
++                leerraum
++                    && self
++                        .zuletzt_aktiv
++                        .get()
++                        .is_some_and(|t| t.elapsed().as_millis() < 1600)
++            }
++        }
++    }
++
++    fn animation(&self, from: f64, to: f64) -> Animation {
++        let c = self.config.borrow();
++        Animation::new(
++            self.clock.clone(),
++            from,
++            to,
++            0.,
++            c.animations.config_notification_open_close.0,
++        )
++    }
++
++    /// Soll-Sichtbarkeit setzen — startet bei Wechsel die Feder.
++    /// (RefCell, weil der Entscheid im Render-Pfad fällt.)
++    pub fn setze_ziel(&self, sichtbar: bool) {
++        let mut lage = self.lage.borrow_mut();
++        // MatrixKit-Regel: reduzierte Bewegung = sofort, keine Feder.
++        if bewegung_reduziert() {
++            *lage = if sichtbar { Lage::Da } else { Lage::Versteckt };
++            return;
++        }
++        match (&*lage, sichtbar) {
++            (Lage::Versteckt | Lage::Verschwindet(_), true) => {
++                let von = match &*lage {
++                    Lage::Verschwindet(anim) => anim.value().clamp(0.0, 1.0),
++                    _ => 0.0,
++                };
++                *lage = Lage::Erscheint(self.animation(von, 1.0));
++            }
++            (Lage::Da | Lage::Erscheint(_), false) => {
++                let von = match &*lage {
++                    Lage::Erscheint(anim) => anim.value().clamp(0.0, 1.0),
++                    _ => 1.0,
++                };
++                *lage = Lage::Verschwindet(self.animation(von, 0.0));
++            }
++            _ => (),
++        }
++    }
++
++    /// Fertige Übergänge auflösen (aus Niri::advance_animations).
++    pub fn advance_animations(&self) {
++        let mut lage = self.lage.borrow_mut();
++        match &*lage {
++            Lage::Erscheint(anim) if anim.is_done() => *lage = Lage::Da,
++            Lage::Verschwindet(anim) if anim.is_clamped_done() => *lage = Lage::Versteckt,
++            _ => (),
++        }
++    }
++
++    pub fn are_animations_ongoing(&self) -> bool {
++        matches!(
++            &*self.lage.borrow(),
++            Lage::Erscheint(_) | Lage::Verschwindet(_)
++        )
++    }
++
++    /// Aktuelle Deckkraft der Feder.
++    pub fn alpha(&self) -> f64 {
++        match &*self.lage.borrow() {
++            Lage::Versteckt => 0.0,
++            Lage::Da => 1.0,
++            Lage::Erscheint(anim) | Lage::Verschwindet(anim) => anim.value().clamp(0.0, 1.0),
++        }
++    }
++
++    pub fn merke_ort(&self, x: f64, y: f64) {
++        self.letzter_ort.set((x, y));
++    }
++
++    pub fn letzter_ort(&self) -> (f64, f64) {
++        self.letzter_ort.get()
++    }
++
++    /// Die zuletzt gezeichnete Wolke (fürs Ausblenden an Ort und Stelle).
++    pub fn letzte_textur(&self) -> Option<TextureBuffer<GlesTexture>> {
++        self.buffer.borrow().as_ref().map(|(_, b)| b.clone())
++    }
++
++    /// Die Icon-Wolke als Textur — gecacht, solange sich Fensterbestand,
++    /// Anordnung und Sichtmitte nicht ändern.
++    pub fn render<R: NiriRenderer>(
++        &self,
++        renderer: &mut R,
++        scale: f64,
++        fenster: &[(String, Point<f64, Logical>, bool)],
++    ) -> Option<TextureBuffer<GlesTexture>> {
++        if fenster.is_empty() {
++            return None;
++        }
++
++        // 1) Blätter-Reihenfolge: wie das Mausrad — von links nach rechts.
++        let mut reihe: Vec<usize> = (0..fenster.len()).collect();
++        reihe.sort_by(|&a, &b| {
++            fenster[a]
++                .1
++                .x
++                .partial_cmp(&fenster[b].1.x)
++                .unwrap_or(std::cmp::Ordering::Equal)
++                .then(
++                    fenster[a]
++                        .1
++                        .y
++                        .partial_cmp(&fenster[b].1.y)
++                        .unwrap_or(std::cmp::Ordering::Equal),
++                )
++        });
++
++        // 2) Der Ausschnitt: höchstens DREI untereinander — das aktive in
++        //    der Mitte, der Vorgänger darüber, der Nachfolger darunter
++        //    (mit Umlauf, wie das Blättern selbst).
++        let aktiv_pos = reihe.iter().position(|&i| fenster[i].2).unwrap_or(0);
++        let n = reihe.len();
++        let auswahl: Vec<usize> = if n <= LISTE_MAX {
++            reihe
++        } else {
++            vec![
++                reihe[(aktiv_pos + n - 1) % n],
++                reihe[aktiv_pos],
++                reihe[(aktiv_pos + 1) % n],
++            ]
++        };
++        let liste: Vec<(String, Point<f64, Logical>, bool)> =
++            auswahl.iter().map(|&i| fenster[i].clone()).collect();
++
++        // 3) Spalten-Plätze: Zentren im festen Takt, eine Spalte.
++        let rand = POLSTER + AKTIV / 2.0;
++        let breite = 2.0 * rand;
++        let hoehe = (liste.len().saturating_sub(1)) as f64 * LISTE_TAKT + 2.0 * rand;
++        let plaetze: Vec<(f64, f64, bool)> = liste
++            .iter()
++            .enumerate()
++            .map(|(k, (_, _, aktiv))| (rand, rand + k as f64 * LISTE_TAKT, *aktiv))
++            .collect();
++
++        // Cache-Schlüssel: Apps + gerasterte Plätze + Sichtmitte + Scale.
++        let mut h = std::collections::hash_map::DefaultHasher::new();
++        for ((app, _, _), (x, y, aktiv)) in liste.iter().zip(&plaetze) {
++            app.hash(&mut h);
++            (((*x / 3.0) as i64), ((*y / 3.0) as i64), *aktiv).hash(&mut h);
++        }
++        scale.to_bits().hash(&mut h);
++        palette_stempel().hash(&mut h);
++        let schluessel = h.finish();
++
++        if let Some((k, buf)) = &*self.buffer.borrow() {
++            if *k == schluessel {
++                return Some(buf.clone());
++            }
++        }
++
++        let buf = self
++            .zeichnen(
++                renderer.as_gles_renderer(),
++                scale,
++                breite,
++                hoehe,
++                &liste,
++                &plaetze,
++            )
++            .ok()?;
++        *self.buffer.borrow_mut() = Some((schluessel, buf.clone()));
++        Some(buf)
++    }
++
++    fn zeichnen(
++        &self,
++        renderer: &mut GlesRenderer,
++        scale: f64,
++        breite: f64,
++        hoehe: f64,
++        fenster: &[(String, Point<f64, Logical>, bool)],
++        plaetze: &[(f64, f64, bool)],
++    ) -> anyhow::Result<TextureBuffer<GlesTexture>> {
++        let b_phys = (breite * scale).round() as i32;
++        let h_phys = (hoehe * scale).round() as i32;
++        let surface = ImageSurface::create(Format::ARgb32, b_phys, h_phys)?;
++        let cr = cairo::Context::new(&surface)?;
++        cr.scale(scale, scale);
++
++        // GeistKit: die lebende Palette — folgt Wallpaper und Hell/Dunkel.
++        let p = palette_laden();
++
++        // Panel: leicht durchscheinende Fläche mit feiner Kante.
++        // Radius KONZENTRISCH zu den Icon-Squircles (mk::radius-Regel:
++        // außen = innen + Abstand).
++        let panel_radius = ecke(ICON) + POLSTER;
++        rounded_rect(&cr, 0.5, 0.5, breite - 1.0, hoehe - 1.0, panel_radius);
++        cr.set_source_rgba(p.panel.0, p.panel.1, p.panel.2, 0.92);
++        cr.fill_preserve()?;
++        cr.set_source_rgba(p.kante.0, p.kante.1, p.kante.2, 0.12);
++        cr.set_line_width(1.0);
++        cr.stroke()?;
++
++        let mut icons = self.icons.borrow_mut();
++        // Das aktive Icon zuletzt zeichnen — es liegt sichtbar obenauf.
++        let mut reihenfolge: Vec<usize> = (0..plaetze.len()).collect();
++        reihenfolge.sort_by_key(|&i| plaetze[i].2);
++        for i in reihenfolge {
++            let (app_id, _, _) = &fenster[i];
++            let (x, y, aktiv) = plaetze[i];
++            let icon = icons
++                .entry(app_id.clone())
++                .or_insert_with(|| icon_laden(app_id));
++
++            let gr = if aktiv { AKTIV } else { ICON };
++            let ox = x - gr / 2.0;
++            let oy = y - gr / 2.0;
++            // Endlos-Rad-Gefühl (Nutzer-Entwurf): oben und unten faden
++            // die Nachbarn aus, nur die Sichtmitte steht voll da.
++            let fade = if aktiv { 1.0 } else { 0.45 };
++
++            // Einheitliche Squircle-Form für ALLE Icons (Konsistenz —
++            // auch Fremd-Icons bekommen die MatrixKit-Kurve).
++            cr.save()?;
++            cr.push_group();
++            rounded_rect(&cr, ox, oy, gr, gr, ecke(gr));
++            cr.clip();
++            match icon {
++                Some(img) => {
++                    let iw = img.width() as f64;
++                    let ih = img.height() as f64;
++                    cr.translate(ox, oy);
++                    cr.scale(gr / iw, gr / ih);
++                    cr.set_source_surface(img, 0.0, 0.0)?;
++                    cr.paint()?;
++                }
++                None => {
++                    // Fallback: getönte Kachel mit Anfangsbuchstaben
++                    // (primary_container / on_primary_container).
++                    cr.set_source_rgba(p.kachel.0, p.kachel.1, p.kachel.2, 1.0);
++                    cr.paint()?;
++                    let buchstabe = app_id
++                        .rsplit(['.', '-'])
++                        .next()
++                        .and_then(|t| t.chars().next())
++                        .unwrap_or('?')
++                        .to_uppercase()
++                        .to_string();
++                    let layout = pangocairo::functions::create_layout(&cr);
++                    let mut font = FontDescription::from_string("Inter Variable Bold 12");
++                    font.set_absolute_size(gr * 0.55 * f64::from(pango::SCALE));
++                    layout.set_font_description(Some(&font));
++                    layout.set_text(&buchstabe);
++                    let (tw, th) = layout.pixel_size();
++                    cr.move_to(
++                        ox + (gr - f64::from(tw)) / 2.0,
++                        oy + (gr - f64::from(th)) / 2.0,
++                    );
++                    cr.set_source_rgba(p.kachel_text.0, p.kachel_text.1, p.kachel_text.2, 1.0);
++                    pangocairo::functions::show_layout(&cr, &layout);
++                }
++            }
++            cr.pop_group_to_source()?;
++            cr.paint_with_alpha(fade)?;
++            cr.restore()?;
++
++            // Sichtmitte: größeres Icon + formgleiche Squircle-Kante
++            // (KEIN Kreis — die Kante folgt der Icon-Form, konzentrisch).
++            if aktiv {
++                let luft = 2.5;
++                rounded_rect(
++                    &cr,
++                    ox - luft,
++                    oy - luft,
++                    gr + 2.0 * luft,
++                    gr + 2.0 * luft,
++                    ecke(gr) + luft,
++                );
++                cr.set_source_rgba(p.aktiv.0, p.aktiv.1, p.aktiv.2, 0.95);
++                cr.set_line_width(2.0);
++                cr.stroke()?;
++            }
++        }
++        drop(cr);
++
++        let data = surface.take_data().unwrap();
++        let buffer = TextureBuffer::from_memory(
++            renderer,
++            &data,
++            smithay::backend::allocator::Fourcc::Argb8888,
++            (b_phys, h_phys),
++            false,
++            scale,
++            Transform::Normal,
++            Vec::new(),
++        )?;
++        Ok(buffer)
++    }
++}
++
++fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, b: f64, h: f64, r: f64) {
++    let r = r.min(b / 2.0).min(h / 2.0);
++    cr.new_path();
++    cr.arc(x + b - r, y + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
++    cr.arc(x + b - r, y + h - r, r, 0.0, std::f64::consts::FRAC_PI_2);
++    cr.arc(
++        x + r,
++        y + h - r,
++        r,
++        std::f64::consts::FRAC_PI_2,
++        std::f64::consts::PI,
++    );
++    cr.arc(
++        x + r,
++        y + r,
++        r,
++        std::f64::consts::PI,
++        1.5 * std::f64::consts::PI,
++    );
++    cr.close_path();
++}
++
++/// App-Icon als cairo-Surface: PNG aus den hicolor-Themes, in
++/// premultipliziertes ARgb32 gewandelt. None = kein Icon gefunden.
++fn icon_laden(app_id: &str) -> Option<ImageSurface> {
++    if app_id.is_empty() {
++        return None;
++    }
++    let pfad = icon_pfad(app_id)?;
++    let file = std::io::BufReader::new(std::fs::File::open(pfad).ok()?);
++    let mut reader = png::Decoder::new(file).read_info().ok()?;
++    let mut buf = vec![0u8; reader.output_buffer_size()?];
++    let info = reader.next_frame(&mut buf).ok()?;
++    if info.bit_depth != png::BitDepth::Eight {
++        return None;
++    }
++    let (w, h) = (info.width as usize, info.height as usize);
++    let stride = Format::ARgb32.stride_for_width(w as u32).ok()? as usize;
++    let mut daten = vec![0u8; stride * h];
++    let kanaele = match info.color_type {
++        png::ColorType::Rgba => 4,
++        png::ColorType::Rgb => 3,
++        _ => return None,
++    };
++    for zeile in 0..h {
++        for spalte in 0..w {
++            let q = (zeile * w + spalte) * kanaele;
++            let (r, g, b, a) = if kanaele == 4 {
++                (buf[q], buf[q + 1], buf[q + 2], buf[q + 3])
++            } else {
++                (buf[q], buf[q + 1], buf[q + 2], 255)
++            };
++            // Premultiply (cairo ARgb32) + native-endian Pixelwort.
++            let m = |k: u8| ((k as u32 * a as u32) / 255) as u32;
++            let px: u32 = ((a as u32) << 24) | (m(r) << 16) | (m(g) << 8) | m(b);
++            let z = zeile * stride + spalte * 4;
++            daten[z..z + 4].copy_from_slice(&px.to_ne_bytes());
++        }
++    }
++    ImageSurface::create_for_data(daten, Format::ARgb32, w as i32, h as i32, stride as i32).ok()
++}
++
++fn icon_pfad(app_id: &str) -> Option<PathBuf> {
++    let mut wurzeln: Vec<String> = Vec::new();
++    if let Ok(h) = std::env::var("HOME") {
++        wurzeln.push(format!("{h}/.local/share/icons"));
++    }
++    wurzeln.push("/usr/share/icons".to_string());
++    wurzeln.push("/var/lib/flatpak/exports/share/icons".to_string());
++    for wurzel in &wurzeln {
++        for groesse in ["128x128", "64x64", "256x256", "48x48", "512x512"] {
++            let p = PathBuf::from(format!("{wurzel}/hicolor/{groesse}/apps/{app_id}.png"));
++            if p.exists() {
++                return Some(p);
++            }
++        }
++    }
++    None
++}
+diff --git a/src/ui/mod.rs b/src/ui/mod.rs
+index c194a247..79055df2 100644
+--- a/src/ui/mod.rs
++++ b/src/ui/mod.rs
+@@ -1,5 +1,6 @@
+ pub mod config_error_notification;
+ pub mod exit_confirm_dialog;
++pub mod fenster_geist;
+ pub mod hotkey_overlay;
+ pub mod mru;
+ pub mod screen_transition;
+diff --git a/src/utils/mod.rs b/src/utils/mod.rs
+index bbeac5bc..07d54b22 100644
+--- a/src/utils/mod.rs
++++ b/src/utils/mod.rs
+@@ -635,3 +635,18 @@ mod tests {
+         check((0, 0, 10, 20), (20, 30, 40, 50), (0, 0));
+     }
+ }
++
++
++/// Matrix-Einstellungs-Kultur (~/.config/matrix/<name>): kleine, lesbare
++/// Dateien — die Leinwand liest sie LIVE, Änderungen wirken sofort.
++pub fn matrix_einstellung(name: &str) -> Option<String> {
++    let home = std::env::var("HOME").ok()?;
++    std::fs::read_to_string(format!("{home}/.config/matrix/{name}"))
++        .ok()
++        .map(|s| s.trim().to_string())
++}
++
++/// Schalter-Konvention: fehlende Datei = AN; nur "aus" schaltet ab.
++pub fn matrix_schalter_an(name: &str) -> bool {
++    matrix_einstellung(name).as_deref() != Some("aus")
++}

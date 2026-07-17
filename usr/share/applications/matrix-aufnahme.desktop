@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Aufnahme
+Comment=Bildschirmfoto und -film — das Aufnahme-Panel
+Exec=matrix-aufnahme
+Icon=matrix-aufnahme
+Terminal=false
+Categories=Utility;
+StartupWMClass=matrix-aufnahme

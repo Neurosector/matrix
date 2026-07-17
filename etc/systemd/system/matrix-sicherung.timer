@@ -1,0 +1,11 @@
+[Unit]
+Description=Tägliche Matrix-Sicherung auf die HDD
+
+[Timer]
+# Nach dem Snapshot (00:08) — die Sicherung nimmt den frischen Stand
+OnCalendar=*-*-* 00:45:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

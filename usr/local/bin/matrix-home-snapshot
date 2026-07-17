@@ -1,0 +1,13 @@
+#!/bin/bash
+# Matrix „Time Machine": täglicher read-only btrfs-Snapshot von /home,
+# behält die letzten 14. Wiederherstellen einzelner Dateien: einfach aus
+# /home/.snapshots/home-<datum>/ zurückkopieren.
+set -euo pipefail
+SNAPDIR=/home/.snapshots
+BEHALTEN=14
+[ -d "$SNAPDIR" ] || btrfs subvolume create "$SNAPDIR"
+btrfs subvolume snapshot -r /home "$SNAPDIR/home-$(date +%Y%m%d-%H%M%S)"
+# Älteste über der Behalten-Grenze löschen
+ls -1d "$SNAPDIR"/home-* 2>/dev/null | sort | head -n -"$BEHALTEN" | while read -r alt; do
+    btrfs subvolume delete "$alt" 2>/dev/null || true
+done

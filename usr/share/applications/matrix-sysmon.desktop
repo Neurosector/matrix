@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Monitor
+GenericName=Systemmonitor
+Comment=CPU, Arbeitsspeicher und Datenträger im Blick — MatrixKit
+Exec=/usr/bin/matrix-sysmon
+Icon=matrix-sysmon
+Terminal=false
+Categories=System;Monitor;
+Keywords=cpu;ram;system;monitor;matrix;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Web
+GenericName=Browser
+Comment=Das Netz in MatrixKit-Gestalt
+Exec=matrix-web
+Icon=matrix-web
+Terminal=false
+Categories=Network;WebBrowser;
+StartupWMClass=matrix-web

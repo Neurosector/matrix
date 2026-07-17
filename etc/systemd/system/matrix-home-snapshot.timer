@@ -1,0 +1,10 @@
+[Unit]
+Description=Täglicher Matrix Home-Snapshot
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+// Morpheus: der Root-Helfer darf ohne Passwort laufen — der
+// Assistent hat bereits streng validiert und rot bestaetigt. Gilt fuer
+// die aktive lokale Sitzung (typisch: Live-Medium).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        action.lookup("program") == "/usr/libexec/morpheus-installiere" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

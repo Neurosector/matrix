@@ -1,0 +1,3 @@
+#!/usr/bin/sh
+# Matrix-Übersicht — der Fetch in der Matrix-Sprache (R64).
+exec fastfetch "$@"
